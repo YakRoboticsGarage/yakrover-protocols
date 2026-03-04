@@ -13,7 +13,7 @@ Operator Signer
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 0.0.1 | 2026-03-04 | Initial protocol specification. 2-of-3 collaborative security model with hardware identity, fleet policy server, and stateless operator signer. |
+| 0.0.1 | 2026-03-04 | Initial spec. 2-of-3 security with hardware identity, fleet policy server, stateless operator signer. |
 
 ---
 
@@ -69,11 +69,17 @@ cryptographic structure, not code secrecy.
 
 ### 4.1 Key Mapping
 
-| Bitkey Component | Robot Fleet Equivalent | Key Type | Properties |
-|-----------------|----------------------|----------|------------|
-| Hardware Device | ATECC608B Secure Element | P-256 (secp256r1) | Non-extractable, born-on-chip, permanent identity. Cannot be cloned even with firmware compromise. |
-| Mobile App | Operator Signer | secp256k1 (Ethereum) | Human-held signing device. Stateless (SeedSigner-inspired) or mobile app with biometrics. Used for escalation. |
-| Block Server | Fleet Policy Server | secp256k1 (Ethereum) | Automated cosigner. Enforces rate limits, action policies, time windows. Cannot act alone. |
+**Hardware Device → ATECC608B Secure Element** (P-256 / secp256r1)
+Non-extractable, born-on-chip, permanent identity. Cannot be cloned even
+with firmware compromise.
+
+**Mobile App → Operator Signer** (secp256k1 / Ethereum)
+Human-held signing device. Stateless (SeedSigner-inspired) or mobile app
+with biometrics. Used for escalation.
+
+**Block Server → Fleet Policy Server** (secp256k1 / Ethereum)
+Automated cosigner. Enforces rate limits, action policies, time windows.
+Cannot act alone.
 
 ### 4.2 Fundamental Rule
 
@@ -224,10 +230,10 @@ the ERC-8004 registration. Robots do not decide their own tier.
 
 | Operator Role | Authorized Actions | Key Storage |
 |--------------|-------------------|-------------|
-| Field Technician | Maintenance reboot, sensor recalibration | Mobile app with biometrics |
-| Fleet Manager | Autonomous mode, fleet join/leave, firmware approval | Air-gapped ESP32-S3 signer (stateless, QR) |
-| Security Officer | Device revocation, policy changes, emergency stop | Air-gapped signer, M-of-N for critical actions |
-| Root Authority | All tiers, server key rotation, contract upgrades | Cold storage, multi-party ceremony |
+| Field Technician | Maintenance reboot, recalibration | Mobile app with biometrics |
+| Fleet Manager | Autonomous mode, fleet join/leave, firmware | Air-gapped ESP32-S3 (stateless, QR) |
+| Security Officer | Revocation, policy changes, emergency stop | Air-gapped signer, M-of-N |
+| Root Authority | All tiers, key rotation, contract upgrades | Cold storage, multi-party ceremony |
 
 ### 8.2 Stateless Signer Design
 
@@ -406,14 +412,26 @@ The 2-of-3 model provides natural spending controls:
 
 ## 12. Recovery Scenarios
 
-| Scenario | Recovery Pair | Procedure |
-|----------|--------------|-----------|
-| Robot stolen/destroyed | Server + Operator | Revoke device cert in ERC-8004. Blacklist pubkey. Provision replacement. |
-| Firmware compromised | Server + Operator | Server detects attestation mismatch, auto-quarantines. Operator approves re-flash. |
-| Fleet server compromised | Robot + Operator | Robots switch to Tier 2 (all actions need operator). Deploy new server. Rotate key. |
-| Fleet server down | Robot + Operator | Robots continue with operator cosigning for essential actions. Graceful degradation. |
-| Operator key compromised | Server + (other) Operator | Revoke address in ERC-8004. Remaining operators rotate keys. |
-| Operator device lost | N/A (stateless) | Device holds no keys. Generate new keystore, register new address. |
+**Robot stolen/destroyed** — Server + Operator
+Revoke device cert in ERC-8004. Blacklist pubkey. Provision replacement.
+
+**Firmware compromised** — Server + Operator
+Server detects attestation mismatch, auto-quarantines. Operator approves
+re-flash.
+
+**Fleet server compromised** — Robot + Operator
+Robots switch to Tier 2 (all actions need operator). Deploy new server.
+Rotate key.
+
+**Fleet server down** — Robot + Operator
+Robots continue with operator cosigning for essential actions. Graceful
+degradation.
+
+**Operator key compromised** — Server + (other) Operator
+Revoke address in ERC-8004. Remaining operators rotate keys.
+
+**Operator device lost** — N/A (stateless)
+Device holds no keys. Generate new keystore, register new address.
 
 ---
 
@@ -434,13 +452,21 @@ The 2-of-3 model provides natural spending controls:
 
 ### Threat Model
 
-| Threat | Impact | Mitigation |
-|--------|--------|------------|
-| Stolen robot | Attacker has 1 key (ECC608) | Cannot act alone. Server stops cosigning. Operator revokes on-chain. |
-| Modified firmware | Robot behavior controlled | Server rejects bad attestation. Robot loses all automated operations. |
-| Compromised server | Attacker has 1 key (server) | Cannot impersonate robots. Operator switches to direct-approval mode. |
-| Compromised operator | Attacker has 1 key (operator) | Cannot act without robot or server. M-of-N prevents single abuse. |
-| Robot + server compromised | Attacker has 2 keys | Can perform Tier 0/1. Cannot do Tier 2/3 (need operator). Audit logs detect. |
+**Stolen robot** — Attacker has 1 key (ECC608).
+Cannot act alone. Server stops cosigning. Operator revokes on-chain.
+
+**Modified firmware** — Robot behavior controlled.
+Server rejects bad attestation. Robot loses all automated operations.
+
+**Compromised server** — Attacker has 1 key (server).
+Cannot impersonate robots. Operator switches to direct-approval mode.
+
+**Compromised operator** — Attacker has 1 key (operator).
+Cannot act without robot or server. M-of-N prevents single abuse.
+
+**Robot + server compromised** — Attacker has 2 keys.
+Can perform Tier 0/1. Cannot do Tier 2/3 (need operator). Audit logs
+detect.
 
 ---
 
@@ -470,9 +496,9 @@ These limitations are addressed in v0.0.2.
 
 | Phase | Deliverable | Depends On |
 |-------|-------------|------------|
-| Phase 1 | ECC608 identity + ERC-8128 signing on ESP32-S3. Basic FastAPI proxy. ERC-8004 registration. | Hardware |
-| Phase 2 | Fleet policy server with cosigning. Redis-backed policy engine. Tier 0/1 automated operations. | Phase 1 |
-| Phase 3 | Operator signer (mobile app for techs, air-gapped ESP32 for managers). Tier 2 approval flow. | Phase 2 |
+| Phase 1 | ECC608 identity + ERC-8128 signing on ESP32-S3. FastAPI proxy. ERC-8004 registration. | Hardware |
+| Phase 2 | Fleet policy server with cosigning. Redis-backed policy engine. Tier 0/1 automation. | Phase 1 |
+| Phase 3 | Operator signer (mobile app for techs, air-gapped ESP32). Tier 2 approval flow. | Phase 2 |
 | Phase 4 | Firmware attestation. Secure boot + flash encryption. Quarantine flow. | Phase 2 |
 | Phase 5 | x402 payment integration with tiered spending controls. | Phase 2 |
 | Phase 6 | M-of-N operator signatures (off-chain collection in server). | Phase 3 |

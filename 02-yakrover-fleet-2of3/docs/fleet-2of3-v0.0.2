@@ -13,8 +13,8 @@
 
 | Version | Date | Description |
 |---------|------|-------------|
-| 0.0.1 | 2026-03-04 | Initial protocol specification. 2-of-3 collaborative security model with hardware identity, fleet policy server, and stateless operator signer. |
-| 0.0.2 | 2026-03-04 | **Breaking:** Operator layer replaced with Safe{Wallet} smart account. Fleet server becomes a Safe Module constrained by on-chain Guards. M-of-N moves on-chain. Remote signing via ERC-4337. Gasless operations via Paymaster. |
+| 0.0.1 | 2026-03-04 | Initial spec. 2-of-3 collaborative security with hardware identity, fleet policy server, and stateless operator signer. |
+| 0.0.2 | 2026-03-04 | **Breaking:** Operator layer → Safe{Wallet}. Server → Safe Module with on-chain Guards. M-of-N on-chain. ERC-4337 gasless. |
 
 ---
 
@@ -22,17 +22,41 @@
 
 ### What Changed
 
-| Aspect | v0.0.1 | v0.0.2 |
-|--------|--------|--------|
-| Operator key management | Individual secp256k1 keys, manually managed | Safe{Wallet} smart account with N owners and configurable threshold |
-| M-of-N enforcement | Off-chain, in fleet server Python code | On-chain, in Safe smart contract. Trustless and auditable. |
-| Policy enforcement | Server-side only (Python + Redis) | Dual: server-side (Python) + on-chain (Safe Guard contract) |
-| Remote signing | Not supported. QR/NFC only. | Supported. Safe collects signatures asynchronously. ERC-4337 UserOps. |
-| Gas costs | Unaddressed. Operators need ETH. | Paymaster-sponsored. Fleet treasury or sponsor covers gas. |
-| Fleet server trust | Trusted key holder with secp256k1 key | Constrained Safe Module. Executes within Guard rules. Revocable. |
-| Audit trail | Centralized server database. Tamperable. | On-chain. Every Safe transaction is a permanent, public record. |
-| Key rotation | Manual ERC-8004 update via Privy tx | Safe owner swap tx. Approved by remaining owners. Address unchanged. |
-| Single server key risk | Key compromise = full server rotation | Module is permissioned, not key-based. Revoke + deploy new one. |
+**Operator key management**
+v0.0.1: Individual secp256k1 keys, manually managed.
+v0.0.2: Safe{Wallet} smart account with N owners and configurable threshold.
+
+**M-of-N enforcement**
+v0.0.1: Off-chain, in fleet server Python code.
+v0.0.2: On-chain, in Safe smart contract. Trustless and auditable.
+
+**Policy enforcement**
+v0.0.1: Server-side only (Python + Redis).
+v0.0.2: Dual: server-side (Python) + on-chain (Safe Guard contract).
+
+**Remote signing**
+v0.0.1: Not supported. QR/NFC only.
+v0.0.2: Supported. Safe collects signatures asynchronously. ERC-4337.
+
+**Gas costs**
+v0.0.1: Unaddressed. Operators need ETH.
+v0.0.2: Paymaster-sponsored. Fleet treasury or sponsor covers gas.
+
+**Fleet server trust**
+v0.0.1: Trusted key holder with secp256k1 key.
+v0.0.2: Constrained Safe Module. Executes within Guard rules. Revocable.
+
+**Audit trail**
+v0.0.1: Centralized server database. Tamperable.
+v0.0.2: On-chain. Every Safe transaction is a permanent, public record.
+
+**Key rotation**
+v0.0.1: Manual ERC-8004 update via Privy tx.
+v0.0.2: Safe owner swap tx. Approved by remaining owners. Address unchanged.
+
+**Single server key risk**
+v0.0.1: Key compromise = full server rotation.
+v0.0.2: Module is permissioned, not key-based. Revoke + deploy new one.
 
 ### What Didn't Change
 
@@ -96,7 +120,7 @@ $60B in assets.
 | On-Chain Registry | ERC-8004 | Links wallet ↔ device pubkey ↔ Safe address ↔ endpoints |
 | HTTP Authentication | ERC-8128 (RFC 9421) | Per-request cryptographic signing from robot |
 | Financial Identity | Privy Server SDK | secp256k1 wallet per robot, on-chain transactions |
-| Automated Cosigner | Fleet Policy Server (Safe Module) | Rate limits, geofences, spending caps. Executes via `execTransactionFromModule` |
+| Automated Cosigner | Fleet Policy Server (Safe Module) | Rate limits, geofences, spending caps. Executes via Safe Module |
 | Operator Governance | Safe{Wallet} | M-of-N multisig, on-chain policy, remote signing, key rotation |
 | Policy Enforcement | Safe Guard (FleetActionGuard) | On-chain validation of action types, thresholds, time locks |
 | Gasless Operations | ERC-4337 + Paymaster | Operators sign without needing ETH. Fleet treasury sponsors gas. |
@@ -142,9 +166,9 @@ collects signatures asynchronously until the threshold is met.
 
 | Owner | Role | Signing Method | Authority |
 |-------|------|---------------|-----------|
-| 0xFleetManager | Fleet Manager | Ledger / Air-gapped ESP32 | Tier 2: firmware, autonomous mode, fleet ops |
-| 0xSecurityOfficer | Security Officer | Ledger / Safe mobile app | Tier 3: revocation, policy changes, emergency |
-| 0xFieldTechnician | Field Technician | Safe mobile app with passkeys | Tier 2: maintenance, recalibration |
+| 0xFleetManager | Fleet Manager | Ledger / Air-gapped ESP32 | Tier 2: firmware, autonomous, fleet |
+| 0xSecurityOfficer | Security Officer | Ledger / Safe mobile app | Tier 3: revocation, policy, emergency |
+| 0xFieldTechnician | Field Technician | Safe app with passkeys | Tier 2: maintenance, recalibration |
 
 ### 3.4 Owner Management
 
@@ -339,12 +363,21 @@ caps, tier enforcement, quarantine) as the authoritative on-chain backstop.
 
 ## 6. Action Tiers (Updated)
 
-| Tier | Signer | Mechanism | Examples |
-|------|--------|-----------|----------|
-| Tier 0: Baseline | Robot ECC608 + Safe Module (auto) | Module calls `execTransactionFromModule`. Guard validates tier ≤ 1. | Telemetry, heartbeat |
-| Tier 1: Elevated | Robot ECC608 + Safe Module (rate-limited) | Same as Tier 0 but Guard enforces spending cap. | x402 micropayments |
-| Tier 2: Privileged | Robot ECC608 + Safe Owners (M-of-N) | Safe owners propose and sign. Guard allows any tier for owners. | Firmware update, autonomous mode |
-| Tier 3: Admin | Safe Owners (M-of-N) | Safe owners propose and sign. No robot involved. | Revoke device, update policy |
+**Tier 0: Baseline** — Robot ECC608 + Safe Module (auto)
+Module calls `execTransactionFromModule`. Guard validates tier ≤ 1.
+Examples: telemetry, heartbeat, basic movement.
+
+**Tier 1: Elevated** — Robot ECC608 + Safe Module (rate-limited)
+Same as Tier 0 but Guard enforces spending cap.
+Examples: x402 micropayments, data publishing.
+
+**Tier 2: Privileged** — Robot ECC608 + Safe Owners (M-of-N)
+Safe owners propose and sign. Guard allows any tier for owners.
+Examples: firmware update, autonomous mode, fleet join.
+
+**Tier 3: Admin** — Safe Owners (M-of-N)
+Safe owners propose and sign. No robot involved.
+Examples: revoke device, update policy, rotate keys.
 
 ### Tier 2 Flow (with Safe)
 
@@ -476,14 +509,31 @@ registration doesn't change.
 
 ## 9. Recovery Scenarios (Updated)
 
-| Scenario | Recovery Pair | Procedure | Improvement over v0.0.1 |
-|----------|--------------|-----------|------------------------|
-| Robot stolen | Safe owners | Propose revocation tx in Safe. 2-of-3 approve. Guard quarantines. | Async remote approval instead of physical presence. |
-| Firmware compromised | Server + Safe owners | Server auto-quarantines (attestation mismatch). Owners approve re-flash via Safe. | Guard enforces quarantine on-chain even if server is bypassed. |
-| Fleet server compromised | Safe owners | Owners revoke module via Safe tx. Deploy new module. No key rotation. | Module revocation is atomic and on-chain. No key to steal. |
-| Fleet server down | Safe owners direct | Owners submit Tier 2/3 txs directly via Safe UI. Tier 0/1 paused. | Safe operates independently of server. |
-| Operator compromised | Other Safe owners | `swapOwner` tx to remove compromised owner. Threshold enforced. | Atomic on-chain swap. Safe address unchanged. |
-| Multiple operators compromised | Remaining owners + social recovery | Safe recovery module with trusted guardians. Time-locked recovery. | Built-in Safe recovery infrastructure. |
+**Robot stolen** — Recovery: Safe owners
+Propose revocation tx in Safe. 2-of-3 approve. Guard quarantines.
+*Improvement:* Async remote approval instead of physical presence.
+
+**Firmware compromised** — Recovery: Server + Safe owners
+Server auto-quarantines (attestation mismatch). Owners approve re-flash
+via Safe.
+*Improvement:* Guard enforces quarantine on-chain even if server is
+bypassed.
+
+**Fleet server compromised** — Recovery: Safe owners
+Owners revoke module via Safe tx. Deploy new module. No key rotation.
+*Improvement:* Module revocation is atomic and on-chain. No key to steal.
+
+**Fleet server down** — Recovery: Safe owners direct
+Owners submit Tier 2/3 txs directly via Safe UI. Tier 0/1 paused.
+*Improvement:* Safe operates independently of server.
+
+**Operator compromised** — Recovery: Other Safe owners
+`swapOwner` tx to remove compromised owner. Threshold enforced.
+*Improvement:* Atomic on-chain swap. Safe address unchanged.
+
+**Multiple operators compromised** — Recovery: Remaining owners + social
+recovery. Safe recovery module with trusted guardians. Time-locked.
+*Improvement:* Built-in Safe recovery infrastructure.
 
 ---
 
@@ -514,12 +564,21 @@ registration doesn't change.
 
 ### Updated Threat Model
 
-| Threat | v0.0.1 Impact | v0.0.2 Impact |
-|--------|--------------|--------------|
-| Fleet server compromised | Attacker holds server key. Can cosign anything until key rotated. | Attacker operates within Guard constraints only. Module revoked by owners. No key to steal. |
-| Single operator compromised | Depends on off-chain M-of-N quality. | On-chain threshold enforcement. Cannot act below threshold. Owner swapped atomically. |
-| Server + 1 operator compromised | Potentially full control if M-of-N was bypassed | Server module limited to Tier 0/1 by Guard. Operator is 1 of N. Still below threshold. |
-| Server database tampered | Audit trail lost | Audit trail on-chain. Immutable. Server logs are supplementary. |
+**Fleet server compromised**
+v0.0.1: Attacker holds server key. Can cosign anything until rotated.
+v0.0.2: Operates within Guard constraints only. Module revoked by owners.
+
+**Single operator compromised**
+v0.0.1: Depends on off-chain M-of-N implementation quality.
+v0.0.2: On-chain threshold enforcement. Owner swapped atomically.
+
+**Server + 1 operator compromised**
+v0.0.1: Potentially full control if M-of-N was bypassed.
+v0.0.2: Server module limited to Tier 0/1 by Guard. Operator is 1 of N.
+
+**Server database tampered**
+v0.0.1: Audit trail lost.
+v0.0.2: Audit trail on-chain. Immutable. Server logs are supplementary.
 
 ---
 
@@ -581,13 +640,13 @@ For each robot:
 | Phase | Deliverable | Depends On |
 |-------|-------------|------------|
 | Phase 1 | Deploy Safe on Base. Configure owners + threshold. | Safe SDK |
-| Phase 2 | FleetActionGuard contract. Daily spend cap, tier enforcement, quarantine. | Solidity, Safe Guard interface |
+| Phase 2 | FleetActionGuard contract. Spend cap, tier enforcement, quarantine. | Solidity, Safe Guard |
 | Phase 3 | FleetPolicyServerModule contract. Wire to fleet server. | Phase 1-2 |
 | Phase 4 | Safe Transaction Service integration for Tier 2/3 proposals. | Phase 1, Safe API |
-| Phase 5 | ERC-4337 integration. Paymaster deployment. Gasless signing. | Phase 1, Pimlico/Stackup bundler |
+| Phase 5 | ERC-4337 + Paymaster deployment. Gasless operator signing. | Phase 1, bundler |
 | Phase 6 | Passkey support for field technicians. | Phase 5, Safe passkey SDK |
 | Phase 7 | Migrate existing fleet from v0.0.1. Update ERC-8004 registrations. | Phase 1-4 |
-| Phase 8 | Open-source firmware release. Reproducible builds. Community audit. | Phase 7, secure boot |
+| Phase 8 | Open-source firmware. Reproducible builds. Community audit. | Phase 7, secure boot |
 
 ---
 

@@ -20,12 +20,18 @@ on-chain registry that makes robots globally discoverable.
 A single FastAPI application acts as the gateway. It sub-mounts each robot's
 MCP server at its own path and exposes a fleet orchestrator for discovery:
 
-| Endpoint | Purpose |
-|---|---|
-| `/fleet/mcp` | Fleet orchestrator — exposes `discover_robot_agents()` for on-chain robot discovery |
-| `/tumbller/mcp` | Tumbller MCP server — `tumbller_move`, `tumbller_is_online`, `tumbller_get_temperature_humidity` |
-| `/tello/mcp` | Tello MCP server — `tello_takeoff`, `tello_land`, `tello_move`, `tello_rotate`, `tello_flip`, `tello_get_status`, `tello_get_attitude`, `tello_get_drone_info`, `tello_is_online` |
-| `/fakerover/mcp` | FakeRover MCP server — `fakerover_move`, `fakerover_is_online`, `fakerover_get_temperature_humidity` |
+**`/fleet/mcp`** — Fleet orchestrator. Exposes `discover_robot_agents()`
+for on-chain robot discovery.
+
+**`/tumbller/mcp`** — Tumbller MCP server. Tools: `tumbller_move`,
+`tumbller_is_online`, `tumbller_get_temperature_humidity`.
+
+**`/tello/mcp`** — Tello MCP server. Tools: `tello_takeoff`, `tello_land`,
+`tello_move`, `tello_rotate`, `tello_flip`, `tello_get_status`,
+`tello_get_attitude`, `tello_get_drone_info`, `tello_is_online`.
+
+**`/fakerover/mcp`** — FakeRover MCP server. Tools: `fakerover_move`,
+`fakerover_is_online`, `fakerover_get_temperature_humidity`.
 
 An ngrok tunnel provides a single public HTTPS URL that maps to the gateway
 on port 8000. Every robot's MCP endpoint becomes reachable from the internet
