@@ -1,0 +1,229 @@
+# yakrover-discovery
+
+## Controlling a Fleet of Robots with yakrover-8004-mcp
+
+yakrover-8004-mcp is a modular MCP framework for multi-robot fleet control
+and on-chain discovery via ERC-8004. It uses a plugin-based architecture
+where each robot gets its own isolated MCP server, all served behind a single
+FastAPI gateway and ngrok tunnel. Robots are registered on the Ethereum
+Sepolia blockchain, making them discoverable by any AI agent, anywhere in the
+world — no central directory needed.
+
+## How It Works
+
+The system has three layers: a gateway that multiplexes MCP connections,
+robot plugins that translate MCP tool calls into hardware commands, and an
+on-chain registry that makes robots globally discoverable.
+
+### The Gateway
+
+A single FastAPI application acts as the gateway. It sub-mounts each robot's
+MCP server at its own path and exposes a fleet orchestrator for discovery:
+
+| Endpoint | Purpose |
+|---|---|
+| `/fleet/mcp` | Fleet orchestrator — exposes `discover_robot_agents()` for on-chain robot discovery |
+| `/tumbller/mcp` | Tumbller MCP server — `tumbller_move`, `tumbller_is_online`, `tumbller_get_temperature_humidity` |
+| `/tello/mcp` | Tello MCP server — `tello_takeoff`, `tello_land`, `tello_move`, `tello_rotate`, `tello_flip`, `tello_get_status`, `tello_get_attitude`, `tello_get_drone_info`, `tello_is_online` |
+| `/fakerover/mcp` | FakeRover MCP server — `fakerover_move`, `fakerover_is_online`, `fakerover_get_temperature_humidity` |
+
+An ngrok tunnel provides a single public HTTPS URL that maps to the gateway
+on port 8000. Every robot's MCP endpoint becomes reachable from the internet
+through that one tunnel.
+
+### Robot Plugins
+
+Each robot is a plugin — a Python package under `src/robots/` that implements
+the `RobotPlugin` base class. A plugin provides three things: metadata for
+on-chain registration, MCP tool definitions, and a client that communicates
+with the physical hardware.
+
+The framework currently ships three plugins:
+
+**Tumbller** — An ESP32-S3 self-balancing robot. The `TumbllerClient` uses
+httpx to send async HTTP requests to the robot's onboard server at port 80.
+It exposes endpoints like `/motor/forward`, `/motor/back`, `/sensor/ht`, and
+`/info`. The robot is discoverable on the local network via mDNS at
+`finland-tumbller-01.local`.
+
+**Tello** — A DJI Tello quadrotor drone. The `TelloClient` wraps the
+djitellopy library, which communicates with the drone over UDP on port 8889.
+Since djitellopy is synchronous, all commands run in a thread pool executor
+to avoid blocking the async event loop. The drone creates its own WiFi access
+point at `192.168.10.1`.
+
+**FakeRover** — A software-only simulator for development and testing. It
+implements the same HTTP interface as the Tumbller (same `/motor/*`,
+`/sensor/ht`, `/info` endpoints) but runs locally on port 8080. No hardware
+required — useful for testing the full stack without a physical robot.
+
+### On-Chain Discovery via ERC-8004
+
+Robots are registered as ERC-721 NFTs on the Ethereum Sepolia blockchain
+using the ERC-8004 Identity Registry. Each registration stores the robot's
+MCP endpoint URL, available tools, classification metadata (robot type, fleet
+provider, fleet domain), and a pointer to an IPFS-hosted AgentCard containing
+full service metadata.
+
+The discovery flow works like this:
+
+1. **Registration (one-time, at the robot's location):** The operator runs
+   `register.py` which mints an NFT on Sepolia, uploads an AgentCard to IPFS
+   via Pinata, and writes on-chain metadata keys like `category=robot`,
+   `robot_type=differential_drive`, and `fleet_provider=yakrover`.
+
+2. **Discovery (anywhere in the world):** An LLM connected to the
+   `/fleet/mcp` endpoint calls `discover_robot_agents()`. This queries the
+   Sepolia blockchain using the `agent0_sdk`, filters for agents with
+   `category=robot`, fetches their IPFS metadata for tool lists and fleet
+   endpoints, and returns a structured list of all matching robots.
+
+3. **Control (remote):** The LLM connects to the discovered MCP endpoint URL
+   (e.g., `https://your-domain.ngrok.app/tumbller/mcp`) and calls tools
+   directly. The call travels through the ngrok tunnel to the FastAPI
+   gateway, which routes it to the correct robot's MCP server, which
+   translates it into a hardware command.
+
+The full chain for a remote session looks like:
+
+```
+LLM (US) → Sepolia blockchain → IPFS AgentCard
+                                    ↓
+                              MCP endpoint URL
+                                    ↓
+                              ngrok tunnel
+                                    ↓
+                              FastAPI gateway (Finland)
+                                    ↓
+                              Robot hardware
+```
+
+## Running the Fleet
+
+### Starting with the Simulator (No Hardware)
+
+```bash
+# Terminal 1 — Start the FakeRover simulator
+PYTHONPATH=src uv run python -m robots.fakerover.simulator
+
+# Terminal 2 — Start the MCP gateway
+PYTHONPATH=src uv run python scripts/serve.py --robots fakerover
+```
+
+### Starting with Physical Robots
+
+```bash
+# Start gateway with Tumbller and Tello
+PYTHONPATH=src uv run python scripts/serve.py \
+    --robots tumbller tello
+
+# Start with public tunnel for remote access
+PYTHONPATH=src uv run python scripts/serve.py \
+    --robots tumbller tello --ngrok
+```
+
+### Connecting an LLM Client
+
+```bash
+# Claude Code — add a specific robot
+claude mcp add --transport http tumbller \
+    http://localhost:8000/tumbller/mcp
+
+# Claude Code — add fleet discovery
+claude mcp add --transport http fleet \
+    http://localhost:8000/fleet/mcp
+```
+
+Once connected, an LLM can discover and control robots through natural
+conversation:
+
+```
+User: "Find me all available robots"
+LLM:  calls discover_robot_agents() on /fleet/mcp
+  → queries Ethereum Sepolia
+  → returns: Tumbller in Finland, Tello in Finland
+
+User: "Is the Tumbller online?"
+LLM:  calls tumbller_is_online()
+  → {"online": true}
+
+User: "Move it forward"
+LLM:  calls tumbller_move("forward")
+  → robot moves in Finland
+```
+
+### Registering a Robot On-Chain
+
+```bash
+# Register the Tumbller on Sepolia
+# (stores MCP URL, tools, metadata on-chain + IPFS)
+PYTHONPATH=src uv run python scripts/register.py tumbller
+
+# Discover all registered robots
+PYTHONPATH=src uv run python scripts/discover.py
+
+# Filter by fleet provider
+PYTHONPATH=src uv run python scripts/discover.py \
+    --provider yakrover
+```
+
+## Adding a New Robot
+
+The plugin architecture makes it straightforward to add new robots. Copy the
+template and implement three methods:
+
+```
+src/robots/myrobot/
+├── __init__.py    # RobotPlugin subclass — metadata, tool names
+├── client.py      # Communication with hardware (HTTP, UDP, serial)
+└── tools.py       # MCP tool definitions (@mcp.tool decorated)
+```
+
+The `__init__.py` defines the plugin class with its `RobotMetadata` (name,
+description, robot type, fleet provider), the list of tool names it
+registers, and a `register_tools` method that wires up the client and tools.
+
+The `client.py` handles the actual protocol — httpx for HTTP robots,
+djitellopy for Tello drones, serial for wired connections, or any other
+transport.
+
+The `tools.py` defines the MCP tools that LLMs can call. Each tool is a thin
+wrapper that translates the MCP call into a client method invocation.
+
+Install the new robot as an optional dependency:
+
+```bash
+uv sync --extra myrobot
+```
+
+Then start the gateway with it:
+
+```bash
+PYTHONPATH=src uv run python scripts/serve.py --robots myrobot
+```
+
+## Key Design Decisions
+
+**One tunnel, many robots.** Rather than running a separate tunnel per robot,
+the gateway multiplexes all MCP servers behind a single ngrok URL. This keeps
+operational overhead minimal and means a single ERC-8004 registration can
+advertise both the robot-specific endpoint and the fleet discovery endpoint.
+
+**Isolated FastMCP instances.** Each robot gets its own FastMCP server with
+its own lifespan. A crash or timeout in one robot's tools doesn't affect
+another. The gateway composes all lifespans at startup.
+
+**Plugin = package.** A robot plugin is a standard Python package with a
+predictable structure. No registration files, no YAML config — just implement
+the `RobotPlugin` abstract class and the framework handles mounting,
+discovery enrichment, and on-chain registration.
+
+**Blockchain for discovery, not control.** ERC-8004 stores identity and
+capability metadata. The actual robot control goes through MCP over HTTP/UDP.
+The blockchain is read-only for discovery queries and write-once for
+registration — keeping gas costs negligible.
+
+**Protocol-agnostic clients.** The Tumbller uses HTTP, the Tello uses UDP,
+and the FakeRover uses HTTP on localhost. The plugin interface abstracts this
+away so the MCP layer doesn't care how the robot communicates — it only sees
+Python async methods.

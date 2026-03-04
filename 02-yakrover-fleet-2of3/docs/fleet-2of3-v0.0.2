@@ -1,0 +1,631 @@
+# 2-of-3 Collaborative Security Protocol for Robot Fleets
+
+**Version:** 0.0.2
+**Status:** Draft
+**Date:** 2026-03-04
+**Author:** Anuraj
+**Architecture:** ATECC608B · ERC-8004 · ERC-8128 · Fleet Policy Server
+(Safe Module) · Safe{Wallet} Operator Multisig
+
+---
+
+## Changelog
+
+| Version | Date | Description |
+|---------|------|-------------|
+| 0.0.1 | 2026-03-04 | Initial protocol specification. 2-of-3 collaborative security model with hardware identity, fleet policy server, and stateless operator signer. |
+| 0.0.2 | 2026-03-04 | **Breaking:** Operator layer replaced with Safe{Wallet} smart account. Fleet server becomes a Safe Module constrained by on-chain Guards. M-of-N moves on-chain. Remote signing via ERC-4337. Gasless operations via Paymaster. |
+
+---
+
+## Summary of Changes from v0.0.1
+
+### What Changed
+
+| Aspect | v0.0.1 | v0.0.2 |
+|--------|--------|--------|
+| Operator key management | Individual secp256k1 keys, manually managed | Safe{Wallet} smart account with N owners and configurable threshold |
+| M-of-N enforcement | Off-chain, in fleet server Python code | On-chain, in Safe smart contract. Trustless and auditable. |
+| Policy enforcement | Server-side only (Python + Redis) | Dual: server-side (Python) + on-chain (Safe Guard contract) |
+| Remote signing | Not supported. QR/NFC only. | Supported. Safe collects signatures asynchronously. ERC-4337 UserOps. |
+| Gas costs | Unaddressed. Operators need ETH. | Paymaster-sponsored. Fleet treasury or sponsor covers gas. |
+| Fleet server trust | Trusted key holder with secp256k1 key | Constrained Safe Module. Executes within Guard rules. Revocable. |
+| Audit trail | Centralized server database. Tamperable. | On-chain. Every Safe transaction is a permanent, public record. |
+| Key rotation | Manual ERC-8004 update via Privy tx | Safe owner swap tx. Approved by remaining owners. Address unchanged. |
+| Single server key risk | Key compromise = full server rotation | Module is permissioned, not key-based. Revoke + deploy new one. |
+
+### What Didn't Change
+
+- ATECC608B hardware identity (P-256, non-extractable)
+- ERC-8128 per-request HTTP authentication
+- ERC-8004 on-chain agent registry
+- Privy wallet for financial identity
+- Firmware attestation flow
+- Action tier classification (Tier 0-3)
+- x402 payment integration
+- Core 2-of-3 signing requirement
+
+---
+
+## 1. Abstract
+
+This protocol extends v0.0.1 by replacing the operator layer with a
+Safe{Wallet} smart account and converting the fleet policy server from a
+trusted key holder into a constrained Safe Module. This moves M-of-N operator
+authorization, policy enforcement, and audit logging on-chain, eliminating
+several trust assumptions from the previous version.
+
+The 2-of-3 structure remains: Robot (ATECC608B) + Server (Safe Module) +
+Operator (Safe Owners). But "Operator" is now a programmable, multi-party,
+on-chain governance layer with battle-tested smart contracts securing over
+$60B in assets.
+
+---
+
+## 2. Architecture Overview
+
+```
+┌──────────────────────────────────────────────────────┐
+│                   ERC-8004 Registry                  │
+│         wallet ↔ device_pubkey ↔ safe_address        │
+└────────────────────────┬─────────────────────────────┘
+                         │
+           ┌─────────────┼──────────────┐
+           │             │              │
+           ▼             ▼              ▼
+  ┌──────────────┐ ┌───────────────┐ ┌─────────────────────┐
+  │   ATECC608B  │ │ Fleet Server  │ │    Safe{Wallet}     │
+  │              │ │ (Safe Module) │ │                     │
+  │  P-256 key   │ │               │ │  Owner 1: Manager   │
+  │  (identity)  │ │  Constrained  │ │  Owner 2: Security  │
+  │              │ │  by Guard     │ │  Owner 3: Technician│
+  │  "I am       │ │  contract     │ │                     │
+  │   robot X"   │ │               │ │  Threshold: 2-of-3  │
+  │              │ │  "Auto-cosign │ │  Guard: FleetGuard  │
+  │              │ │   within      │ │  Module: FleetPolicy│
+  │              │ │   policy"     │ │                     │
+  └──────────────┘ └───────────────┘ │  "Govern the fleet" │
+                                     └─────────────────────┘
+```
+
+### Component Mapping
+
+| Layer | Component | Role |
+|-------|-----------|------|
+| Hardware Identity | ESP32-S3 + ATECC608B | Non-extractable P-256 keypair, device attestation, ERC-8128 signing |
+| On-Chain Registry | ERC-8004 | Links wallet ↔ device pubkey ↔ Safe address ↔ endpoints |
+| HTTP Authentication | ERC-8128 (RFC 9421) | Per-request cryptographic signing from robot |
+| Financial Identity | Privy Server SDK | secp256k1 wallet per robot, on-chain transactions |
+| Automated Cosigner | Fleet Policy Server (Safe Module) | Rate limits, geofences, spending caps. Executes via `execTransactionFromModule` |
+| Operator Governance | Safe{Wallet} | M-of-N multisig, on-chain policy, remote signing, key rotation |
+| Policy Enforcement | Safe Guard (FleetActionGuard) | On-chain validation of action types, thresholds, time locks |
+| Gasless Operations | ERC-4337 + Paymaster | Operators sign without needing ETH. Fleet treasury sponsors gas. |
+
+---
+
+## 3. Safe{Wallet} as the Operator Layer
+
+### 3.1 Why Safe
+
+Safe (formerly Gnosis Safe) is the most battle-tested smart account
+infrastructure on Ethereum. It provides M-of-N multisig, modular architecture
+(modules, guards, fallback handlers), ERC-4337 account abstraction, and
+formal verification of core contracts. Over $60B in assets are secured by
+Safe contracts.
+
+### 3.2 Safe Deployment (Per Fleet)
+
+Each fleet deploys one Safe{Wallet} that serves as the operator authority for
+all robots in that fleet:
+
+```json
+{
+  "safe_address": "0xFleetSafe",
+  "chain_id": 8453,
+  "owners": [
+    "0xFleetManager",
+    "0xSecurityOfficer",
+    "0xFieldTechnician"
+  ],
+  "threshold": 2,
+  "modules": ["0xFleetPolicyServerModule"],
+  "guard": "0xFleetActionGuard",
+  "fallback_handler": "0xSafe4337Module"
+}
+```
+
+### 3.3 Safe Owners = Operator Keys
+
+Each Safe owner corresponds to an operator role. Owners can sign from any
+device — hardware wallet, mobile app, browser extension, or passkeys. Safe
+collects signatures asynchronously until the threshold is met.
+
+| Owner | Role | Signing Method | Authority |
+|-------|------|---------------|-----------|
+| 0xFleetManager | Fleet Manager | Ledger / Air-gapped ESP32 | Tier 2: firmware, autonomous mode, fleet ops |
+| 0xSecurityOfficer | Security Officer | Ledger / Safe mobile app | Tier 3: revocation, policy changes, emergency |
+| 0xFieldTechnician | Field Technician | Safe mobile app with passkeys | Tier 2: maintenance, recalibration |
+
+### 3.4 Owner Management
+
+Adding, removing, or replacing operators is a Safe transaction:
+
+```
+// Add a new operator
+safe.addOwnerWithThreshold(newOwner, newThreshold)
+
+// Remove an operator
+safe.removeOwner(prevOwner, owner, newThreshold)
+
+// Swap an operator (atomic)
+safe.swapOwner(prevOwner, oldOwner, newOwner)
+```
+
+All owner changes require the current threshold of signatures. The Safe
+address remains the same — so the ERC-8004 registration doesn't need
+updating when operators rotate.
+
+---
+
+## 4. Fleet Policy Server as Safe Module
+
+### 4.1 Module Architecture
+
+In v0.0.1, the fleet server held its own secp256k1 private key and cosigned
+requests independently. In v0.0.2, the server becomes a **Safe Module** — a
+smart contract that is authorized to execute transactions through the Safe,
+but only within constraints defined by the Guard.
+
+```solidity
+// FleetPolicyServerModule.sol (simplified)
+
+contract FleetPolicyServerModule {
+    address public safe;
+    address public server;  // The fleet server's EOA
+
+    modifier onlyServer() {
+        require(msg.sender == server, "Not server");
+        _;
+    }
+
+    /// @notice Execute a Tier 0/1 action on behalf of the fleet Safe
+    /// @dev Guard contract validates action before execution
+    function executeAutomatedAction(
+        address robot,
+        bytes32 actionHash,
+        uint8 actionTier,
+        bytes calldata data
+    ) external onlyServer {
+        // The Safe's Guard will check:
+        // - actionTier <= 1 (module can only do Tier 0/1)
+        // - rate limits haven't been exceeded
+        // - robot is registered and not quarantined
+
+        ISafe(safe).execTransactionFromModule(
+            /* to */ address(this),
+            /* value */ 0,
+            /* data */ data,
+            /* operation */ Enum.Operation.Call
+        );
+    }
+}
+```
+
+### 4.2 What the Module Can and Cannot Do
+
+| Can Do | Cannot Do |
+|--------|-----------|
+| Execute Tier 0/1 actions that pass the Guard | Execute Tier 2/3 actions (Guard rejects) |
+| Auto-cosign telemetry, heartbeat, micropayments | Approve firmware updates or autonomous mode |
+| Respond to robot requests within policy | Initiate actions without a robot request |
+| Be revoked by Safe owners at any time | Resist revocation or modify its own permissions |
+
+### 4.3 Module Revocation
+
+If the fleet server is compromised, Safe owners revoke the module:
+
+```
+// Disable the compromised module
+safe.disableModule(prevModule, fleetPolicyServerModule)
+
+// Deploy and enable a new module
+safe.enableModule(newFleetPolicyServerModule)
+```
+
+This requires the Safe threshold (e.g., 2-of-3 owners). No server key
+rotation needed — the module is permissioned by the Safe, not by a private
+key.
+
+---
+
+## 5. Safe Guard: FleetActionGuard
+
+### 5.1 Purpose
+
+The Guard is an on-chain smart contract that validates every transaction the
+Safe executes — whether initiated by owners (Tier 2/3) or by the module
+(Tier 0/1). It provides a second layer of policy enforcement that cannot be
+bypassed by server compromise.
+
+### 5.2 Guard Contract (Simplified)
+
+```solidity
+// FleetActionGuard.sol
+
+contract FleetActionGuard is BaseGuard {
+
+    struct ActionPolicy {
+        uint8 maxModuleTier;
+        uint256 dailySpendLimit;
+        uint256 dailySpent;
+        uint256 lastResetTimestamp;
+        mapping(address => bool) quarantinedRobots;
+    }
+
+    ActionPolicy public policy;
+
+    function checkTransaction(
+        address to,
+        uint256 value,
+        bytes memory data,
+        Enum.Operation operation,
+        uint256 safeTxGas,
+        uint256 baseGas,
+        uint256 gasPrice,
+        address gasToken,
+        address payable refundReceiver,
+        bytes memory signatures,
+        address msgSender
+    ) external override {
+
+        // If called by module (automated action)
+        if (isModule(msgSender)) {
+            (address robot, uint8 actionTier) =
+                decodeAction(data);
+
+            // Module can only do Tier 0/1
+            require(
+                actionTier <= policy.maxModuleTier,
+                "Tier too high for module"
+            );
+
+            // Robot must not be quarantined
+            require(
+                !policy.quarantinedRobots[robot],
+                "Robot quarantined"
+            );
+
+            // Check daily spending limit
+            if (value > 0) {
+                _resetDailyIfNeeded();
+                require(
+                    policy.dailySpent + value
+                        <= policy.dailySpendLimit,
+                    "Daily spend limit exceeded"
+                );
+                policy.dailySpent += value;
+            }
+        }
+
+        // If called by owners (Tier 2/3), no additional
+        // restrictions — M-of-N threshold enforced by Safe
+    }
+
+    function checkAfterExecution(
+        bytes32, bool
+    ) external override {
+        // Post-execution checks if needed
+    }
+}
+```
+
+### 5.3 Guard vs Server Policy
+
+| Check | Server (off-chain) | Guard (on-chain) |
+|-------|-------------------|------------------|
+| Rate limits (per-second/minute) | Yes (Redis) | No (gas-prohibitive) |
+| Geofencing | Yes (GPS validation) | No (no oracle) |
+| Firmware attestation | Yes (hash comparison) | No (complex computation) |
+| Daily spending cap | Yes (redundant) | Yes (authoritative) |
+| Action tier enforcement | Yes (redundant) | Yes (authoritative) |
+| Robot quarantine | Yes (Redis flag) | Yes (authoritative) |
+| Time-of-day restrictions | Yes (timezone logic) | Possible (block.timestamp) |
+
+The server handles high-frequency, complex checks (rate limits, geofences,
+attestation). The Guard handles low-frequency, critical checks (spending
+caps, tier enforcement, quarantine) as the authoritative on-chain backstop.
+
+---
+
+## 6. Action Tiers (Updated)
+
+| Tier | Signer | Mechanism | Examples |
+|------|--------|-----------|----------|
+| Tier 0: Baseline | Robot ECC608 + Safe Module (auto) | Module calls `execTransactionFromModule`. Guard validates tier ≤ 1. | Telemetry, heartbeat |
+| Tier 1: Elevated | Robot ECC608 + Safe Module (rate-limited) | Same as Tier 0 but Guard enforces spending cap. | x402 micropayments |
+| Tier 2: Privileged | Robot ECC608 + Safe Owners (M-of-N) | Safe owners propose and sign. Guard allows any tier for owners. | Firmware update, autonomous mode |
+| Tier 3: Admin | Safe Owners (M-of-N) | Safe owners propose and sign. No robot involved. | Revoke device, update policy |
+
+### Tier 2 Flow (with Safe)
+
+```
+1.  Robot encounters privileged action (e.g., firmware update)
+2.  Robot signs ActionRequest with ECC608
+3.  Fleet server receives request, classifies as Tier 2
+4.  Server proposes Safe transaction via Safe Transaction Service API
+    POST https://safe-transaction-base.safe.global/
+      api/v1/safes/{safe}/multisig-transactions/
+5.  Safe owners receive notification (mobile app, email, push)
+6.  Owners review action details in Safe{Wallet} UI or mobile app
+7.  Owners sign from anywhere (Ledger, mobile, passkeys)
+8.  Once threshold met (e.g., 2-of-3), Safe executes transaction
+9.  Guard validates the action
+10. Fleet server receives confirmation, forwards to robot
+11. Robot proceeds with firmware update
+```
+
+### Tier 3 Flow (Admin without Robot)
+
+```
+1. Any Safe owner proposes admin action (e.g., revoke robot)
+2. Other owners cosign via Safe{Wallet} UI
+3. Guard validates (if applicable)
+4. Safe executes: update ERC-8004 registry, quarantine in Guard
+```
+
+---
+
+## 7. ERC-4337 Integration
+
+### 7.1 Gasless Operator Signing
+
+Safe's ERC-4337 integration enables operators to approve fleet actions
+without holding ETH:
+
+```
+1. Operator signs a UserOperation (off-chain, no gas)
+2. UserOperation is sent to a Bundler
+3. Bundler submits to EntryPoint contract
+4. Paymaster (fleet treasury) pays gas on behalf of the operator
+5. Safe validates signatures and executes
+```
+
+### 7.2 Paymaster Configuration
+
+```json
+{
+  "paymaster": "0xFleetPaymaster",
+  "funding_source": "fleet_treasury",
+  "sponsored_actions": [
+    "device_revocation",
+    "firmware_approval",
+    "policy_change",
+    "emergency_stop",
+    "owner_rotation"
+  ],
+  "max_gas_per_operation": "500000",
+  "daily_gas_budget": "10000000"
+}
+```
+
+### 7.3 Passkey Support
+
+Safe supports passkeys (WebAuthn) as signer authentication. Field technicians
+can approve Tier 2 actions using biometrics on their phone — no private key
+management, no seed phrases, no hardware wallet required.
+
+---
+
+## 8. ERC-8004 Registration (v0.0.2)
+
+The registration now points to the Safe address instead of individual operator
+keys:
+
+```json
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "tumbller-007",
+  "description": "Self-balancing robot with 2-of-3 collaborative security (Safe)",
+  "identity": {
+    "wallet": "0xRobotWalletAddress",
+    "device": {
+      "secure_element": "ATECC608B",
+      "pubkey": "04a1b2c3d4e5f6...",
+      "curve": "secp256r1"
+    }
+  },
+  "collaborative_security": {
+    "model": "2-of-3",
+    "version": "0.0.2",
+    "keys": {
+      "device": "04a1b2c3... (P-256, ECC608)",
+      "safe": {
+        "address": "0xFleetSafe",
+        "chain_id": 8453,
+        "threshold": 2,
+        "module": "0xFleetPolicyServerModule",
+        "guard": "0xFleetActionGuard"
+      }
+    },
+    "policy_url": "https://fleet.example.com/policy/007"
+  },
+  "firmware": {
+    "expected_hash": "sha256:abc123...",
+    "version": "1.4.2",
+    "source": "https://github.com/tumbller/firmware"
+  },
+  "endpoints": [
+    {
+      "name": "mcp",
+      "endpoint": "https://fleet.example.com/mcp/007"
+    },
+    {
+      "name": "x402",
+      "endpoint": "https://fleet.example.com/x402/007"
+    }
+  ]
+}
+```
+
+**Key difference:** The `operators` array is gone. The Safe address is the
+single reference. Operator management happens inside the Safe contract, not
+in the ERC-8004 registration. When operators rotate, the ERC-8004
+registration doesn't change.
+
+---
+
+## 9. Recovery Scenarios (Updated)
+
+| Scenario | Recovery Pair | Procedure | Improvement over v0.0.1 |
+|----------|--------------|-----------|------------------------|
+| Robot stolen | Safe owners | Propose revocation tx in Safe. 2-of-3 approve. Guard quarantines. | Async remote approval instead of physical presence. |
+| Firmware compromised | Server + Safe owners | Server auto-quarantines (attestation mismatch). Owners approve re-flash via Safe. | Guard enforces quarantine on-chain even if server is bypassed. |
+| Fleet server compromised | Safe owners | Owners revoke module via Safe tx. Deploy new module. No key rotation. | Module revocation is atomic and on-chain. No key to steal. |
+| Fleet server down | Safe owners direct | Owners submit Tier 2/3 txs directly via Safe UI. Tier 0/1 paused. | Safe operates independently of server. |
+| Operator compromised | Other Safe owners | `swapOwner` tx to remove compromised owner. Threshold enforced. | Atomic on-chain swap. Safe address unchanged. |
+| Multiple operators compromised | Remaining owners + social recovery | Safe recovery module with trusted guardians. Time-locked recovery. | Built-in Safe recovery infrastructure. |
+
+---
+
+## 10. x402 Payment Integration (Updated)
+
+| Payment Type | Mechanism | Spending Control |
+|-------------|-----------|-----------------|
+| Micropayments (Tier 1) | Robot + Module auto-execution | Guard enforces daily spending cap on-chain |
+| Large payments (Tier 2) | Robot + Safe owners (M-of-N) | Owners review in Safe UI. Any amount. |
+| Fleet treasury (Tier 3) | Safe owners only | Standard Safe multisig. Full audit trail. |
+| Gas sponsorship | Paymaster | Fleet treasury covers operator gas costs |
+
+---
+
+## 11. Security Properties (Updated)
+
+### New Guarantees in v0.0.2
+
+| Property | Mechanism |
+|----------|-----------|
+| On-chain M-of-N | Safe contract enforces threshold. Not software, not server code. Trustless. |
+| On-chain policy backstop | Guard contract validates actions independently of server. Server compromise limited. |
+| Remote multi-party approval | Safe collects signatures asynchronously. Operators in different locations/timezones. |
+| Gasless operations | ERC-4337 + Paymaster. Operators don't need ETH. Lowers barrier. |
+| Atomic key rotation | Safe `swapOwner` is a single on-chain tx. No ERC-8004 update needed. |
+| Permanent audit trail | Every Safe tx is on-chain. Immutable record. |
+| Module revocability | Compromised server module disabled in one Safe tx. No key material to steal. |
+
+### Updated Threat Model
+
+| Threat | v0.0.1 Impact | v0.0.2 Impact |
+|--------|--------------|--------------|
+| Fleet server compromised | Attacker holds server key. Can cosign anything until key rotated. | Attacker operates within Guard constraints only. Module revoked by owners. No key to steal. |
+| Single operator compromised | Depends on off-chain M-of-N quality. | On-chain threshold enforcement. Cannot act below threshold. Owner swapped atomically. |
+| Server + 1 operator compromised | Potentially full control if M-of-N was bypassed | Server module limited to Tier 0/1 by Guard. Operator is 1 of N. Still below threshold. |
+| Server database tampered | Audit trail lost | Audit trail on-chain. Immutable. Server logs are supplementary. |
+
+---
+
+## 12. Migration from v0.0.1 to v0.0.2
+
+### Step 1: Deploy Safe Infrastructure
+
+```
+1. Deploy Safe{Wallet} on Base (chain 8453)
+   - Owners: existing operator addresses
+   - Threshold: 2-of-3
+2. Deploy FleetActionGuard contract
+3. Deploy FleetPolicyServerModule contract
+4. Enable module on Safe: safe.enableModule(moduleAddress)
+5. Set guard on Safe: safe.setGuard(guardAddress)
+6. Enable Safe4337Module for ERC-4337 support
+```
+
+### Step 2: Update ERC-8004 Registrations
+
+```
+For each robot:
+1. Update registration JSON:
+   - Remove "operators" array
+   - Add "safe" object with address, threshold, module, guard
+   - Bump version to "0.0.2"
+2. Update IPFS registration
+3. Update ERC-8004 tokenURI on-chain
+```
+
+### Step 3: Update Fleet Server
+
+```
+1. Remove server's secp256k1 private key management
+2. Replace cosigning logic with Safe Module execution:
+   - fleetModule.executeAutomatedAction(
+       robot, actionHash, tier, data)
+3. Replace direct M-of-N collection with Safe Transaction
+   Service API:
+   - POST /api/v1/safes/{safe}/multisig-transactions/
+4. Update operator notification to use Safe's push system
+5. Update audit logging to reference Safe tx hashes
+```
+
+### Step 4: Verify
+
+```
+1. Test Tier 0/1: Robot → Server → Module → Guard → Execute
+2. Test Tier 2: Robot → Server proposes → Owners sign → Execute
+3. Test Tier 3: Owner proposes → Owners sign → Execute
+4. Test Guard: Verify module cannot execute Tier 2+ actions
+5. Test Recovery: Revoke module, swap owner, quarantine robot
+```
+
+---
+
+## 13. Implementation Roadmap (v0.0.2)
+
+| Phase | Deliverable | Depends On |
+|-------|-------------|------------|
+| Phase 1 | Deploy Safe on Base. Configure owners + threshold. | Safe SDK |
+| Phase 2 | FleetActionGuard contract. Daily spend cap, tier enforcement, quarantine. | Solidity, Safe Guard interface |
+| Phase 3 | FleetPolicyServerModule contract. Wire to fleet server. | Phase 1-2 |
+| Phase 4 | Safe Transaction Service integration for Tier 2/3 proposals. | Phase 1, Safe API |
+| Phase 5 | ERC-4337 integration. Paymaster deployment. Gasless signing. | Phase 1, Pimlico/Stackup bundler |
+| Phase 6 | Passkey support for field technicians. | Phase 5, Safe passkey SDK |
+| Phase 7 | Migrate existing fleet from v0.0.1. Update ERC-8004 registrations. | Phase 1-4 |
+| Phase 8 | Open-source firmware release. Reproducible builds. Community audit. | Phase 7, secure boot |
+
+---
+
+## 14. Tech Stack Summary (v0.0.2)
+
+| Layer | Component | Role |
+|-------|-----------|------|
+| Hardware Identity | ESP32-S3 + ATECC608B | Non-extractable P-256 keypair, device attestation |
+| On-Chain Registry | ERC-8004 | Links wallet ↔ device pubkey ↔ Safe address ↔ endpoints |
+| HTTP Authentication | ERC-8128 (RFC 9421) | Per-request cryptographic signing |
+| Financial Identity | Privy Server SDK | secp256k1 wallet per robot, on-chain transactions |
+| Operator Governance | Safe{Wallet} | M-of-N multisig, owner management, on-chain audit |
+| Policy Enforcement | FleetActionGuard (Safe Guard) | On-chain spending caps, tier enforcement, quarantine |
+| Automated Cosigner | FleetPolicyServerModule | Constrained auto-execution for Tier 0/1 |
+| Account Abstraction | ERC-4337 (Safe4337Module) | Gasless UserOperations, passkey auth |
+| Gas Sponsorship | Paymaster | Fleet treasury sponsors operator gas |
+| Off-Chain Policy | Fleet Server (FastAPI + Redis) | Rate limits, geofences, attestation, complex checks |
+| Caching | Redis | Policy profiles, nonce tracking, ERC-8004 resolution |
+
+---
+
+## 15. Known Limitations (v0.0.2)
+
+1. **On-chain gas for Guard checks.** Guard validation adds gas cost to every
+   Safe transaction. Optimized for low-frequency Tier 2/3 actions.
+2. **Module-Guard latency.** On-chain execution adds ~2-5s latency for
+   Tier 0/1 compared to pure off-chain cosigning in v0.0.1. Mitigated by
+   caching policy decisions.
+3. **Safe owner key security.** Safe inherits the security of its owners' key
+   management. A compromised owner EOA is still a compromised signer.
+4. **Single-fleet Safe.** Current design uses one Safe per fleet. Multi-fleet
+   hierarchies (Safe of Safes) are possible but not specified.
+5. **Oracle dependency for complex policy.** Geofencing and firmware
+   attestation remain off-chain because on-chain oracles add cost and
+   complexity.
+
+---
+
+*Protocol specification maintained at:
+`github.com/tumbller/fleet-security-protocol`*
+*Safe deployment tracked at: `base:0xFleetSafe`*

@@ -1,0 +1,497 @@
+# 2-of-3 Collaborative Security Protocol for Robot Fleets
+
+**Version:** 0.0.1
+**Status:** Draft
+**Date:** 2026-03-04
+**Author:** Anuraj
+**Architecture:** ATECC608B · ERC-8004 · ERC-8128 · Fleet Policy Server ·
+Operator Signer
+
+---
+
+## Changelog
+
+| Version | Date | Description |
+|---------|------|-------------|
+| 0.0.1 | 2026-03-04 | Initial protocol specification. 2-of-3 collaborative security model with hardware identity, fleet policy server, and stateless operator signer. |
+
+---
+
+## 1. Abstract
+
+This protocol defines a 2-of-3 collaborative security model for managing
+autonomous robot fleets. Inspired by Bitkey's Bitcoin wallet architecture, it
+ensures that no single compromised component — not the robot, not the server,
+not the operator — can act alone. Every consequential action requires two
+independent cryptographic signatures.
+
+The protocol builds on hardware-anchored Ethereum identity (ATECC608B +
+ERC-8004 + ERC-8128) and adds an authorization layer using a fleet policy
+server as an automated cosigner and a stateless operator signer for human
+escalation.
+
+---
+
+## 2. Problem Statement
+
+IoT robots need autonomy to operate efficiently, but firmware can be modified
+by attackers through supply chain compromise, malicious OTA updates, or
+physical access. Prior protocol iterations used stateless authorization grants
+(inspired by SeedSigner) that were enforced by the robot's own firmware. This
+had a fundamental flaw: if the firmware is modified, the robot can persist
+grants in flash, ignore expiry, or bypass action restrictions entirely.
+
+**Core insight:** Any security property enforced solely by firmware running on
+a device can be subverted by modifying that firmware. The device cannot be
+trusted to police itself.
+
+---
+
+## 3. The Bitkey Inspiration
+
+Bitkey (by Block) uses a 2-of-3 multisig architecture for Bitcoin
+self-custody:
+
+- **Hardware device** — cold key, NFC-based, biometric-protected
+- **Mobile app** — hot key on the user's phone
+- **Block server** — hot key for automated cosigning and recovery
+
+Any 2 of 3 keys are required to sign a transaction. The server auto-cosigns
+small transactions up to a daily limit. Large transactions require the
+hardware device. Recovery uses any two remaining keys if one is lost.
+
+Bitkey's firmware is fully open source because security depends on the 2-of-3
+cryptographic structure, not code secrecy.
+
+---
+
+## 4. The 2-of-3 Robot Fleet Model
+
+### 4.1 Key Mapping
+
+| Bitkey Component | Robot Fleet Equivalent | Key Type | Properties |
+|-----------------|----------------------|----------|------------|
+| Hardware Device | ATECC608B Secure Element | P-256 (secp256r1) | Non-extractable, born-on-chip, permanent identity. Cannot be cloned even with firmware compromise. |
+| Mobile App | Operator Signer | secp256k1 (Ethereum) | Human-held signing device. Stateless (SeedSigner-inspired) or mobile app with biometrics. Used for escalation. |
+| Block Server | Fleet Policy Server | secp256k1 (Ethereum) | Automated cosigner. Enforces rate limits, action policies, time windows. Cannot act alone. |
+
+### 4.2 Fundamental Rule
+
+Every action that affects the physical world, moves money, or changes
+configuration requires exactly **two of these three signatures**.
+
+---
+
+## 5. Key Pair Combinations
+
+### 5A. Robot + Server (Automated Operations)
+
+The workhorse pair for day-to-day fleet operations. The robot signs every HTTP
+request with its ECC608 key via ERC-8128. The fleet policy server validates
+identity and checks the action against standing policy. If within policy, the
+server cosigns automatically. No human involved.
+
+**Handles:** Telemetry, heartbeat, basic movement, sensor data, small x402
+micropayments.
+
+**Critical property:** Because the server enforces policy (not the robot's
+firmware), a modified firmware cannot bypass restrictions. The robot can
+request anything, but the server only cosigns what policy allows.
+
+### 5B. Robot + Operator (Human-Approved Operations)
+
+Handles privileged actions requiring human judgment: firmware updates,
+autonomous mode, fleet join/leave, large payments, sensor config changes.
+
+**Flow:**
+1. Robot displays action request as QR code (or sends push notification)
+2. Operator reviews on their signing device
+3. Operator cosigns if approved
+4. Server is not involved — this pair intentionally bypasses the server
+
+The operator key is the escalation path. Used infrequently but carries the
+highest trust.
+
+### 5C. Server + Operator (Recovery and Administration)
+
+Fleet administration without involving any specific robot: revoking
+compromised devices, re-provisioning replacements, updating fleet-wide
+policies, rotating keys, emergency fleet stops.
+
+This is the recovery pair. If a robot is compromised, server + operator can
+revoke its ERC-8004 registration and provision a replacement without needing
+the compromised device.
+
+---
+
+## 6. Action Tiers
+
+| Tier | Key Pair | Examples | Latency |
+|------|----------|----------|---------|
+| Tier 0: Baseline | Robot + Server (auto) | Telemetry, heartbeat, basic movement | < 100ms (cached) |
+| Tier 1: Elevated | Robot + Server (rate-limited) | x402 micropayments, data publishing | < 500ms (policy) |
+| Tier 2: Privileged | Robot + Operator | Firmware update, autonomous mode, fleet join/leave | Minutes (human) |
+| Tier 3: Admin | Server + Operator | Revoke device, update policy, rotate keys, emergency stop | Minutes (human) |
+
+Tier classification is maintained by the fleet policy server and encoded in
+the ERC-8004 registration. Robots do not decide their own tier.
+
+---
+
+## 7. Fleet Policy Server
+
+### 7.1 Core Responsibilities
+
+- **Identity verification:** Validate ERC-8128 signatures. Resolve device
+  public keys via ERC-8004 (cached in Redis).
+- **Policy enforcement:** Classify actions by tier. Check rate limits, time
+  windows, geofences, spending caps.
+- **Cosigning:** Produce secp256k1 cosignature for approved Tier 0/1 actions.
+- **Attestation monitoring:** Verify firmware hashes in heartbeats. Quarantine
+  robots with unexpected firmware.
+- **Audit logging:** Record every action request, policy decision, and
+  cosignature.
+
+### 7.2 Per-Robot Policy Profile
+
+```json
+{
+  "robot": "0xRobotWallet",
+  "device_pubkey": "04a1b2c3...",
+  "tier0_actions": [
+    "telemetry", "heartbeat", "basic_movement"
+  ],
+  "tier1_actions": {
+    "x402_payment": {
+      "max_per_tx": "0.001 ETH",
+      "max_daily": "0.01 ETH",
+      "rate_limit": "10/hour"
+    },
+    "data_publish": {
+      "rate_limit": "100/minute",
+      "allowed_topics": ["telemetry/*", "sensor/*"]
+    }
+  },
+  "tier2_actions": [
+    "firmware_update", "autonomous_mode",
+    "fleet_join", "fleet_leave", "large_payment"
+  ],
+  "firmware": {
+    "expected_hash": "sha256:abc123...",
+    "version": "1.4.2",
+    "attestation_interval": 300
+  },
+  "geofence": {
+    "center": [37.7749, -122.4194],
+    "radius_meters": 500
+  },
+  "active_hours": {
+    "start": "06:00",
+    "end": "22:00",
+    "timezone": "US/Pacific"
+  }
+}
+```
+
+### 7.3 Request Flow (Tier 0/1)
+
+```
+1. Robot sends HTTP request signed with ECC608 (ERC-8128)
+2. Server verifies device signature against ERC-8004 registry
+3. Server classifies action → Tier 0 or Tier 1
+4. Server checks policy: rate limit? geofence? active hours? spending cap?
+5. If policy passes: server cosigns with its secp256k1 key
+6. Request forwarded to backend with dual signature
+7. If policy fails: return 403 with reason code
+   Robot can optionally escalate to Tier 2 (request operator approval)
+```
+
+### 7.4 Server Security Constraints
+
+- **Cannot impersonate robots:** Does not possess any ECC608 private key.
+- **Cannot initiate actions:** Only responds to requests. Passive cosigner.
+- **Cannot modify policy unilaterally:** Policy changes are Tier 3 (require
+  server + operator).
+- **Auditable:** Every cosign decision logged with full context.
+- **Replaceable:** Compromised server → operator deploys new instance,
+  rotates server key in ERC-8004.
+
+---
+
+## 8. Operator Signer
+
+### 8.1 Operator Key Tiers
+
+| Operator Role | Authorized Actions | Key Storage |
+|--------------|-------------------|-------------|
+| Field Technician | Maintenance reboot, sensor recalibration | Mobile app with biometrics |
+| Fleet Manager | Autonomous mode, fleet join/leave, firmware approval | Air-gapped ESP32-S3 signer (stateless, QR) |
+| Security Officer | Device revocation, policy changes, emergency stop | Air-gapped signer, M-of-N for critical actions |
+| Root Authority | All tiers, server key rotation, contract upgrades | Cold storage, multi-party ceremony |
+
+### 8.2 Stateless Signer Design
+
+For Fleet Manager and above:
+
+- **Hardware:** Custom ESP32-S3 with display, camera, NFC. WiFi/BLE
+  permanently disabled (antenna trace cut or eFuse disabled).
+- **Key loading:** Operator scans QR of encrypted keystore at session start.
+  Device decrypts in RAM using PIN entered on-device.
+- **Signing:** Robot presents action request as QR. Operator device scans,
+  displays human-readable details, produces secp256k1 signature. Signature
+  returned via QR or NFC.
+- **Session end:** Power off → RAM clears → no key material persists.
+
+### 8.3 M-of-N Operator Authorization
+
+For critical actions, multiple operator signatures are collected by the fleet
+server:
+
+```json
+{
+  "operator_keys": [
+    { "address": "0xTechnician1", "role": "field_tech" },
+    { "address": "0xFleetManager1", "role": "fleet_manager" },
+    {
+      "address": "0xSecurityOfficer1",
+      "role": "security_officer"
+    }
+  ],
+  "multisig_policy": {
+    "firmware_update_fleet": { "required": 2, "of": 3 },
+    "autonomous_mode": { "required": 1, "of": 3 },
+    "emergency_stop": { "required": 1, "of": 3 },
+    "device_revocation": { "required": 1, "of": 3 },
+    "policy_change": { "required": 2, "of": 3 },
+    "server_key_rotation": { "required": 3, "of": 3 }
+  }
+}
+```
+
+**Limitation:** This M-of-N logic is implemented in the fleet server's Python
+code. Signature collection, threshold tracking, and nonce management are all
+off-chain. This works but introduces trust in the server's correct
+implementation.
+
+---
+
+## 9. Identity Layer (Unchanged from Prior Protocol)
+
+### 9.1 Provisioning (One-Time)
+
+```
+1. ATECC608B generates P-256 keypair internally
+   └── Private key locked in secure element
+   └── Public key exported to ESP32-S3
+
+2. ESP32 sends public key to Fleet Manager API
+   POST /api/provision { "device_pubkey": "04a1b2..." }
+
+3. Fleet Manager:
+   a. Creates Privy embedded wallet → 0xRobotWallet
+   b. Uploads ERC-8004 registration JSON to IPFS
+   c. Mints ERC-8004 NFT with tokenURI → registration
+   d. Returns wallet address + NFT ID to ESP32
+
+4. ESP32 stores wallet address + NFT ID in NVS flash
+```
+
+### 9.2 ERC-8004 Registration (v0.0.1)
+
+```json
+{
+  "type": "https://eips.ethereum.org/EIPS/eip-8004#registration-v1",
+  "name": "tumbller-007",
+  "description": "Self-balancing robot with 2-of-3 collaborative security",
+  "identity": {
+    "wallet": "0xRobotWalletAddress",
+    "device": {
+      "secure_element": "ATECC608B",
+      "pubkey": "04a1b2c3d4e5f6...",
+      "curve": "secp256r1"
+    }
+  },
+  "collaborative_security": {
+    "model": "2-of-3",
+    "version": "0.0.1",
+    "keys": {
+      "device": "04a1b2c3... (P-256, ECC608)",
+      "server": "0xFleetServerAddress (secp256k1)",
+      "operators": [
+        { "address": "0xTechnician1", "role": "field_tech" },
+        { "address": "0xFleetManager1", "role": "fleet_manager" },
+        {
+          "address": "0xSecurityOfficer1",
+          "role": "security_officer"
+        }
+      ]
+    },
+    "policy_url": "https://fleet.example.com/policy/007"
+  },
+  "firmware": {
+    "expected_hash": "sha256:abc123...",
+    "version": "1.4.2",
+    "source": "https://github.com/tumbller/firmware"
+  },
+  "endpoints": [
+    {
+      "name": "mcp",
+      "endpoint": "https://fleet.example.com/mcp/007"
+    },
+    {
+      "name": "x402",
+      "endpoint": "https://fleet.example.com/x402/007"
+    }
+  ]
+}
+```
+
+### 9.3 ERC-8128 HTTP Authentication
+
+Every HTTP request from the robot includes RFC 9421 compliant signatures:
+
+```http
+POST /api/telemetry HTTP/1.1
+Host: fleet.example.com
+Content-Digest: sha-256=:base64hash:
+Signature-Input: sig1=("@method" "@path" "content-digest");
+    keyid="erc8128:8453:0xRobotWallet";
+    created=1708000000;nonce="abc123";
+    alg="ecdsa-p256-sha256"
+Signature: sig1=:base64_p256_device_signature:
+```
+
+For Tier 2 actions, operator cosignature is added:
+
+```http
+X-Auth-Cosigner: operator
+X-Auth-Cosig: base64_operator_secp256k1_signature
+X-Auth-Cosig-Input: ("@method" "@path" "content-digest");
+    keyid="operator:0xFleetManager1";
+    created=1708000000;nonce="def456"
+```
+
+---
+
+## 10. Firmware Attestation
+
+```
+1. On boot, ESP32-S3 computes SHA-256 over its firmware partition
+2. Hash sent to ATECC608B for signing via I2C
+3. ECC608 signs: { firmware_hash, boot_count, timestamp }
+4. Robot includes attestation in periodic heartbeat to fleet server
+5. Server compares signed hash against expected_hash in policy profile
+6. Mismatch → quarantine robot, alert operators,
+   reject all Tier 0/1 cosigning
+```
+
+Attestation is strengthened by ESP32-S3 secure boot (only executes firmware
+signed by fleet signing key) and flash encryption (firmware binary cannot be
+read or modified without eFuse encryption key).
+
+---
+
+## 11. x402 Payment Integration
+
+The 2-of-3 model provides natural spending controls:
+
+- **Micropayments (Tier 1):** Robot + Server. Server checks daily cap and
+  per-tx limit. If within policy, cosigns. Privy wallet executes transfer.
+- **Large payments (Tier 2):** Robot + Operator. Operator reviews
+  amount/recipient. Prevents compromised robot from draining wallet.
+- **Treasury operations (Tier 3):** Server + Operator. Funding wallets,
+  withdrawing earnings, adjusting policies.
+
+---
+
+## 12. Recovery Scenarios
+
+| Scenario | Recovery Pair | Procedure |
+|----------|--------------|-----------|
+| Robot stolen/destroyed | Server + Operator | Revoke device cert in ERC-8004. Blacklist pubkey. Provision replacement. |
+| Firmware compromised | Server + Operator | Server detects attestation mismatch, auto-quarantines. Operator approves re-flash. |
+| Fleet server compromised | Robot + Operator | Robots switch to Tier 2 (all actions need operator). Deploy new server. Rotate key. |
+| Fleet server down | Robot + Operator | Robots continue with operator cosigning for essential actions. Graceful degradation. |
+| Operator key compromised | Server + (other) Operator | Revoke address in ERC-8004. Remaining operators rotate keys. |
+| Operator device lost | N/A (stateless) | Device holds no keys. Generate new keystore, register new address. |
+
+---
+
+## 13. Security Properties
+
+### Guarantees
+
+| Property | Mechanism |
+|----------|-----------|
+| No single point of compromise | Every action requires 2-of-3 signatures. |
+| Firmware independence | Policy enforced server-side. Modified firmware cannot bypass. |
+| Open source safe | Security = cryptographic keys, not code secrecy. |
+| Automated operations | Server cosigns routine actions. No human bottleneck for ~95% of ops. |
+| Human override | Operator cosigns privileged actions. Human judgment where it matters. |
+| Graceful degradation | Any one component down → other two continue. |
+| Hardware-rooted identity | ECC608 key non-extractable. Cannot be spoofed. |
+| Recovery without re-provisioning | Any lost component replaced using the other two. |
+
+### Threat Model
+
+| Threat | Impact | Mitigation |
+|--------|--------|------------|
+| Stolen robot | Attacker has 1 key (ECC608) | Cannot act alone. Server stops cosigning. Operator revokes on-chain. |
+| Modified firmware | Robot behavior controlled | Server rejects bad attestation. Robot loses all automated operations. |
+| Compromised server | Attacker has 1 key (server) | Cannot impersonate robots. Operator switches to direct-approval mode. |
+| Compromised operator | Attacker has 1 key (operator) | Cannot act without robot or server. M-of-N prevents single abuse. |
+| Robot + server compromised | Attacker has 2 keys | Can perform Tier 0/1. Cannot do Tier 2/3 (need operator). Audit logs detect. |
+
+---
+
+## 14. Known Limitations (v0.0.1)
+
+1. **M-of-N is off-chain.** Operator multisig logic lives in the fleet
+   server's Python code. If the server is compromised, the M-of-N enforcement
+   is compromised too.
+2. **No on-chain policy enforcement.** The server's policy engine is trusted
+   software. There are no smart contract guards preventing the server from
+   cosigning outside policy.
+3. **Operator signing is local-only.** The stateless signer requires physical
+   proximity (QR/NFC). Remote multi-party approval for geographically
+   distributed teams is not supported.
+4. **Audit trail is centralized.** Server logs are in a database, not
+   on-chain. Tamperable if server is compromised.
+5. **Gas costs unaddressed.** On-chain operations (ERC-8004 updates,
+   revocations) cost gas with no paymaster integration.
+6. **Single server key.** The fleet server holds one secp256k1 key. Key
+   compromise requires full server rotation.
+
+These limitations are addressed in v0.0.2.
+
+---
+
+## 15. Implementation Roadmap (v0.0.1)
+
+| Phase | Deliverable | Depends On |
+|-------|-------------|------------|
+| Phase 1 | ECC608 identity + ERC-8128 signing on ESP32-S3. Basic FastAPI proxy. ERC-8004 registration. | Hardware |
+| Phase 2 | Fleet policy server with cosigning. Redis-backed policy engine. Tier 0/1 automated operations. | Phase 1 |
+| Phase 3 | Operator signer (mobile app for techs, air-gapped ESP32 for managers). Tier 2 approval flow. | Phase 2 |
+| Phase 4 | Firmware attestation. Secure boot + flash encryption. Quarantine flow. | Phase 2 |
+| Phase 5 | x402 payment integration with tiered spending controls. | Phase 2 |
+| Phase 6 | M-of-N operator signatures (off-chain collection in server). | Phase 3 |
+
+---
+
+## 16. Tech Stack Summary
+
+| Layer | Component | Role |
+|-------|-----------|------|
+| Hardware Identity | ESP32-S3 + ATECC608B | Non-extractable P-256 keypair, device attestation |
+| On-Chain Registry | ERC-8004 | Links wallet ↔ device pubkey ↔ endpoints ↔ policy |
+| HTTP Authentication | ERC-8128 (RFC 9421) | Per-request cryptographic signing |
+| Financial Identity | Privy Server SDK | secp256k1 wallet, on-chain transactions |
+| Automated Cosigner | Fleet Policy Server (FastAPI) | Rate limits, geofences, spending caps, attestation |
+| Human Authorization | Operator Signer (ESP32-S3 / Mobile) | Stateless signing for Tier 2 escalation |
+| Caching | Redis | Policy profiles, nonce tracking, ERC-8004 resolution |
+
+---
+
+*Protocol specification maintained at:
+`github.com/tumbller/fleet-security-protocol`*
