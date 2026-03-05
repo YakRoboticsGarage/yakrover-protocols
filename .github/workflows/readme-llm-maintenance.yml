@@ -3,7 +3,7 @@ name: README LLM Maintenance (Anthropic or OpenAI)
 on:
   workflow_dispatch:
   schedule:
-    - cron: "17 6 * * 1"
+    - cron: "0 17 * * 1"
 
 permissions:
   contents: write
@@ -52,20 +52,19 @@ jobs:
 
           prompt_file=$(mktemp)
           {
-            cat <<'PROMPT'
-You are maintaining a technical README in a protocol repository.
-
-Goal:
-- Improve accuracy and clarity of README details.
-
-Hard constraints:
-- Make only minimal, conservative edits.
-- Do not rewrite structure or tone.
-- Do not remove existing sections unless they are clearly incorrect.
-- Preserve headings and most wording.
-- Keep edits focused on specific details (paths, filenames, short clarifications).
-- Return the full updated README markdown only.
-PROMPT
+            printf '%s\n' \
+              "You are maintaining a technical README in a protocol repository." \
+              "" \
+              "Goal:" \
+              "- Improve accuracy and clarity of README details." \
+              "" \
+              "Hard constraints:" \
+              "- Make only minimal, conservative edits." \
+              "- Do not rewrite structure or tone." \
+              "- Do not remove existing sections unless they are clearly incorrect." \
+              "- Preserve headings and most wording." \
+              "- Keep edits focused on specific details (paths, filenames, short clarifications)." \
+              "- Return the full updated README markdown only."
             echo
             echo "Repository file tree (depth<=3):"
             echo "$repo_tree"
@@ -167,7 +166,7 @@ PROMPT
 
           printf '%s\n' "$updated_readme" > README.md
 
-      - name: Guardrail: skip sweeping README edits
+      - name: "Guardrail: skip sweeping README edits"
         if: ${{ steps.provider.outputs.provider != 'none' }}
         run: |
           set -euo pipefail
