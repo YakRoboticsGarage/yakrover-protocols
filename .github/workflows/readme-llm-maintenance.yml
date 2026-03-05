@@ -91,15 +91,17 @@ jobs:
             sudo apt-get update && sudo apt-get install -y jq
           fi
 
-          prompt_text="$(cat "$PROMPT_PATH")"
+          system_prompt="You are maintaining a technical README in a protocol repository. Make only minimal, conservative edits. Do not rewrite structure or tone. Preserve headings and most wording. Keep edits focused on specific details (paths, filenames, short clarifications). Return the full updated README markdown only."
 
           payload=$(jq -n \
             --arg model "$ANTHROPIC_MODEL" \
-            --arg prompt "$prompt_text" \
+            --arg system "$system_prompt" \
+            --rawfile prompt "$PROMPT_PATH" \
             '{
               model: $model,
-              max_tokens: 2200,
-              temperature: 0.2,
+              max_tokens: 4096,
+              thinking: { type: "adaptive" },
+              system: $system,
               messages: [
                 { "role": "user", "content": $prompt }
               ]
