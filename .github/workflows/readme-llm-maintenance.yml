@@ -1,4 +1,4 @@
-name: README LLM Maintenance
+name: README LLM Maintenance (Anthropic or OpenAI)
 
 on:
   workflow_dispatch:
@@ -7,25 +7,42 @@ on:
 
 permissions:
   contents: write
+  pull-requests: write
+
+concurrency:
+  group: readme-llm-maintenance
+  cancel-in-progress: false
 
 jobs:
   update-readme:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout
+      - name: Checkout default branch
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
-      - name: Generate conservative README update with LLM
-        if: ${{ secrets.OPENAI_API_KEY != '' }}
+      - name: Select provider
+        id: provider
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5-mini' }}
+          HAS_ANTHROPIC: ${{ secrets.ANTHROPIC_API_KEY != '' }}
+          HAS_OPENAI: ${{ secrets.OPENAI_API_KEY != '' }}
         run: |
           set -euo pipefail
-
-          if ! command -v jq >/dev/null 2>&1; then
-            sudo apt-get update && sudo apt-get install -y jq
+          if [ "${HAS_ANTHROPIC}" = "true" ]; then
+            echo "provider=anthropic" >> "$GITHUB_OUTPUT"
+          elif [ "${HAS_OPENAI}" = "true" ]; then
+            echo "provider=openai" >> "$GITHUB_OUTPUT"
+          else
+            echo "provider=none" >> "$GITHUB_OUTPUT"
           fi
+          echo "Selected provider: $(grep '^provider=' "$GITHUB_OUTPUT" | cut -d= -f2)"
+
+      - name: Build README prompt context
+        id: prompt
+        if: ${{ steps.provider.outputs.provider != 'none' }}
+        run: |
+          set -euo pipefail
 
           repo_tree=$(find . -maxdepth 3 -type f \
             -not -path './.git/*' \
@@ -57,8 +74,68 @@ PROMPT
             cat README.md
           } > "$prompt_file"
 
+          {
+            echo "prompt_path=$prompt_file"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Generate README with Anthropic
+        if: ${{ steps.provider.outputs.provider == 'anthropic' }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL || 'claude-3-5-sonnet-latest' }}
+          PROMPT_PATH: ${{ steps.prompt.outputs.prompt_path }}
+        run: |
+          set -euo pipefail
+
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y jq
+          fi
+
+          prompt_text="$(cat "$PROMPT_PATH")"
+
           payload=$(jq -n \
-            --rawfile prompt "$prompt_file" \
+            --arg model "$ANTHROPIC_MODEL" \
+            --arg prompt "$prompt_text" \
+            '{
+              model: $model,
+              max_tokens: 2200,
+              temperature: 0.2,
+              messages: [
+                { "role": "user", "content": $prompt }
+              ]
+            }')
+
+          response=$(curl -sS https://api.anthropic.com/v1/messages \
+            -H "x-api-key: ${ANTHROPIC_API_KEY}" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "content-type: application/json" \
+            -d "$payload")
+
+          updated_readme=$(echo "$response" | jq -r '[ .content[]? | select(.type=="text") | .text ] | join("\n")')
+
+          if [ -z "$updated_readme" ] || [ "$updated_readme" = "null" ]; then
+            echo "Anthropic response did not contain usable text."
+            echo "$response" | jq .
+            exit 1
+          fi
+
+          printf '%s\n' "$updated_readme" > README.md
+
+      - name: Generate README with OpenAI
+        if: ${{ steps.provider.outputs.provider == 'openai' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5-mini' }}
+          PROMPT_PATH: ${{ steps.prompt.outputs.prompt_path }}
+        run: |
+          set -euo pipefail
+
+          if ! command -v jq >/dev/null 2>&1; then
+            sudo apt-get update && sudo apt-get install -y jq
+          fi
+
+          payload=$(jq -n \
+            --rawfile prompt "$PROMPT_PATH" \
             --arg model "$OPENAI_MODEL" \
             '{
               model: $model,
@@ -81,7 +158,7 @@ PROMPT
           updated_readme=$(echo "$response" | jq -r '.output_text // empty')
 
           if [ -z "$updated_readme" ]; then
-            echo "LLM response did not contain output_text."
+            echo "OpenAI response did not contain output_text."
             echo "$response" | jq .
             exit 1
           fi
@@ -89,7 +166,7 @@ PROMPT
           printf '%s\n' "$updated_readme" > README.md
 
       - name: Guardrail: skip sweeping README edits
-        if: ${{ secrets.OPENAI_API_KEY != '' }}
+        if: ${{ steps.provider.outputs.provider != 'none' }}
         run: |
           set -euo pipefail
           if git diff --quiet -- README.md; then
@@ -107,21 +184,29 @@ PROMPT
             echo "README update within guardrail (${changed_lines} lines changed)."
           fi
 
-      - name: Commit README update
-        if: ${{ secrets.OPENAI_API_KEY != '' }}
+      - name: Create or update PR from dedicated bot branch
+        if: ${{ steps.provider.outputs.provider != 'none' }}
+        uses: peter-evans/create-pull-request@v6
+        with:
+          branch: bot/readme-maintenance
+          base: main
+          delete-branch: false
+          commit-message: "docs: conservative README detail refresh"
+          title: "docs: conservative README detail refresh"
+          body: |
+            Automated README maintenance update.
+
+            - Provider: `${{ steps.provider.outputs.provider }}`
+            - Conservative prompt constraints
+            - Guardrail applied (>80 changed lines => revert)
+            - Opened from dedicated branch `bot/readme-maintenance`
+          add-paths: |
+            README.md
+          labels: |
+            documentation
+            automated-pr
+
+      - name: Skip (no API key configured)
+        if: ${{ steps.provider.outputs.provider == 'none' }}
         run: |
-          set -euo pipefail
-          if git diff --quiet -- README.md; then
-            echo "No commit needed."
-            exit 0
-          fi
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md
-          git commit -m "docs: conservative README detail refresh"
-          git push
-
-      - name: Skip (missing API key)
-        if: ${{ secrets.OPENAI_API_KEY == '' }}
-        run: echo "OPENAI_API_KEY secret is not set; skipping README update job."
+          echo "Neither ANTHROPIC_API_KEY nor OPENAI_API_KEY is set; skipping README update job."
