@@ -82,10 +82,11 @@ PROMPT
         if: ${{ steps.provider.outputs.provider == 'anthropic' }}
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL || 'claude-3-5-sonnet-latest' }}
+          ANTHROPIC_MODEL: ${{ vars.ANTHROPIC_MODEL }}
           PROMPT_PATH: ${{ steps.prompt.outputs.prompt_path }}
         run: |
           set -euo pipefail
+          : "${ANTHROPIC_MODEL:=claude-sonnet-4-6}"
 
           if ! command -v jq >/dev/null 2>&1; then
             sudo apt-get update && sudo apt-get install -y jq
@@ -125,10 +126,11 @@ PROMPT
         if: ${{ steps.provider.outputs.provider == 'openai' }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          OPENAI_MODEL: ${{ vars.OPENAI_MODEL || 'gpt-5-mini' }}
+          OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
           PROMPT_PATH: ${{ steps.prompt.outputs.prompt_path }}
         run: |
           set -euo pipefail
+          : "${OPENAI_MODEL:=gpt-5-mini}"
 
           if ! command -v jq >/dev/null 2>&1; then
             sudo apt-get update && sudo apt-get install -y jq
