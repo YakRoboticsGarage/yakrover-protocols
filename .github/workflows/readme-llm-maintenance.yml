@@ -31,6 +31,7 @@ jobs:
           HAS_OPENAI: ${{ secrets.OPENAI_API_KEY != '' }}
         run: |
           set -euo pipefail
+          echo "has_openai=${HAS_OPENAI}" >> "$GITHUB_OUTPUT"
           if [ "${HAS_ANTHROPIC}" = "true" ]; then
             echo "provider=anthropic" >> "$GITHUB_OUTPUT"
           elif [ "${HAS_OPENAI}" = "true" ]; then
@@ -129,7 +130,7 @@ jobs:
 
       - name: Generate README with OpenAI
         id: openai
-        if: ${{ steps.provider.outputs.provider == 'openai' || (steps.anthropic.outcome == 'failure' && secrets.OPENAI_API_KEY != '') }}
+        if: ${{ steps.provider.outputs.provider == 'openai' || (steps.anthropic.outcome == 'failure' && steps.provider.outputs.has_openai == 'true') }}
         env:
           OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
           OPENAI_MODEL: ${{ vars.OPENAI_MODEL }}
