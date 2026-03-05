@@ -1,3 +1,4 @@
+```markdown
 # yakrover-protocols
 
 Protocol specifications for autonomous robot fleet identity, security, discovery, and payments on Ethereum.
@@ -17,7 +18,7 @@ Hardware-anchored Ethereum identity using ATECC608B secure elements, ERC-8004 ag
 
 | Version | Status | Description |
 |---------|--------|-------------|
-| [v0.0.1](01-yakrover-identity/docs/identity-v0.0.1) | Draft | Initial specification |
+| [v0.0.1](01-yakrover-identity/specs/identity-v0.0.1.md) | Draft | Initial specification |
 
 ### [02 — Fleet Security (2-of-3)](02-yakrover-fleet-2of3/)
 
@@ -30,8 +31,8 @@ Hardware-anchored Ethereum identity using ATECC608B secure elements, ERC-8004 ag
 
 | Version | Status | Description |
 |---------|--------|-------------|
-| [v0.0.1](02-yakrover-fleet-2of3/docs/fleet-2of3-v0.0.1) | Draft | Initial 2-of-3 model with off-chain M-of-N operator authorization |
-| [v0.0.2](02-yakrover-fleet-2of3/docs/fleet-2of3-v0.0.2) | Draft | Operator layer replaced with Safe{Wallet}. M-of-N moves on-chain. Fleet server becomes a constrained Safe Module with on-chain Guard enforcement. ERC-4337 gasless operations. |
+| [v0.0.1](02-yakrover-fleet-2of3/specs/fleet-2of3-v0.0.1.md) | Draft | Initial 2-of-3 model with off-chain M-of-N operator authorization |
+| [v0.0.2](02-yakrover-fleet-2of3/specs/fleet-2of3-v0.0.2.md) | Draft | Operator layer replaced with Safe{Wallet}. M-of-N moves on-chain. Fleet server becomes a constrained Safe Module with on-chain Guard enforcement. ERC-4337 gasless operations. |
 
 ### [03 — Discovery](03-yakrover-discovery/)
 
@@ -44,7 +45,7 @@ On-chain robot discovery and MCP-based fleet control via ERC-8004.
 
 | Version | Status | Description |
 |---------|--------|-------------|
-| [v0.0.1](03-yakrover-discovery/docs/discovery-v0.0.1) | Draft | MCP framework with on-chain discovery, plugin system, and multi-robot gateway |
+| [v0.0.1](03-yakrover-discovery/specs/discovery-v0.0.1.md) | Draft | MCP framework with on-chain discovery, plugin system, and multi-robot gateway |
 
 ### [04 — Payments](04-yakrover-payments/)
 
@@ -67,3 +68,4 @@ Autonomous robot payments and economic interactions. *Specification in progress.
 ## License
 
 [Apache License 2.0](LICENSE)
+```
