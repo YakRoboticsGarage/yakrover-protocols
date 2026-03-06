@@ -120,6 +120,13 @@ jobs:
 
           updated_readme=$(echo "$response" | jq -r '[ .content[]? | select(.type=="text") | .text ] | join("\n")')
 
+          # Strip wrapper code fences when the model returns full markdown in ```...```.
+          first_line=$(printf '%s\n' "$updated_readme" | sed -n '1p')
+          last_line=$(printf '%s\n' "$updated_readme" | sed -n '$p')
+          if [[ "$first_line" =~ ^``` ]] && [[ "$last_line" =~ ^```[[:space:]]*$ ]]; then
+            updated_readme=$(printf '%s\n' "$updated_readme" | sed '1d;$d')
+          fi
+
           if [ -z "$updated_readme" ] || [ "$updated_readme" = "null" ]; then
             echo "Anthropic response did not contain usable text."
             echo "$response" | jq .
@@ -165,6 +172,13 @@ jobs:
             -d "$payload")
 
           updated_readme=$(echo "$response" | jq -r '.output_text // empty')
+
+          # Strip wrapper code fences when the model returns full markdown in ```...```.
+          first_line=$(printf '%s\n' "$updated_readme" | sed -n '1p')
+          last_line=$(printf '%s\n' "$updated_readme" | sed -n '$p')
+          if [[ "$first_line" =~ ^``` ]] && [[ "$last_line" =~ ^```[[:space:]]*$ ]]; then
+            updated_readme=$(printf '%s\n' "$updated_readme" | sed '1d;$d')
+          fi
 
           if [ -z "$updated_readme" ]; then
             echo "OpenAI response did not contain output_text."
