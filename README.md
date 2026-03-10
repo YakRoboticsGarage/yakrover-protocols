@@ -49,7 +49,11 @@ On-chain robot discovery and MCP-based fleet control via ERC-8004.
 
 ### [04 — Payments](04-yakrover-payments/)
 
-Autonomous robot payments and economic interactions. *Specification in progress.*
+Autonomous robot payments and economic interactions.
+
+| Version | Status | Description |
+|---------|--------|-------------|
+| [v0.0.1](04-yakrover-payments/specs/payments-v0.0.1.md) | Draft | Initial specification |
 
 ## Tech Stack
 
