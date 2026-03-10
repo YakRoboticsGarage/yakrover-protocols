@@ -25,7 +25,7 @@ can be payment-gated without modifying business logic. The FastAPI backend
 uses a dynamic x402 middleware that intercepts requests to protected routes
 before they reach the route handlers.
 
-## Why ERC-8128 Belongs in the Payments Layer
+## ERC-8128 Request Authentication for Paid Sessions
 
 x402 answers **"has this request been paid for?"** ERC-8128 answers
 **"which wallet is making this HTTP request right now?"** The two standards
@@ -100,7 +100,10 @@ start time, and the expiration.
 **ERC-8128 Verifier** — A request-signature verifier that checks RFC 9421
 signature headers, validates the signature against the caller's wallet
 address, enforces nonce uniqueness, and rejects expired or replayed requests.
-For state-changing routes, it should require request-bound signatures.
+For state-changing routes, it should require request-bound signatures. In a
+FastAPI deployment, this can run as middleware immediately after x402 session
+creation checks or as a shared dependency used by the robot proxy and payout
+routes.
 
 **Privy Wallet Service** — Each robot gets a server-side Privy wallet when
 it's registered. This wallet receives USDC payments and holds the robot's
@@ -140,9 +143,10 @@ the following ERC-8128 verification policy:
 Recommended verifier settings:
 
 - Maximum validity window: **60 seconds** for control actions
+- Allowed clock skew: **5 seconds** to tolerate normal client / server drift
 - Required replay protection: **nonce + created + expires**
 - Required request-bound components: **method, path, content digest when a
-  body exists, robot identifier header, and any session identifier header**
+  body exists, `x-yakrover-robot-id`, and `x-yakrover-session-id`**
 - Address matching: the recovered ERC-8128 signer must match the wallet that
   paid for the active session
 
@@ -263,6 +267,10 @@ from eth_account import Account
 from eth_account.messages import encode_defunct
 
 
+CLOCK_SKEW_SECONDS = 5
+COMPONENTS = '("@method" "@path" "content-digest" "x-yakrover-nonce")'
+
+
 def content_digest(body: bytes) -> str:
     digest = hashlib.sha256(body).digest()
     return "sha-256=:" + base64.b64encode(digest).decode("ascii") + ":"
@@ -271,13 +279,13 @@ def content_digest(body: bytes) -> str:
 def build_signing_string(method: str, path: str, digest: str, nonce: str,
                          created: int, expires: int) -> str:
     return "\n".join([
-        f'"@method": {method.lower()}',
-        f'"@path": {path}',
-        f'"content-digest": {digest}',
-        f'"x-yakrover-nonce": {nonce}',
+        f'"@method": "{method}"',
+        f'"@path": "{path}"',
+        f'"content-digest": "{digest}"',
+        f'"x-yakrover-nonce": "{nonce}"',
         (
-            '"@signature-params": ("@method" "@path" "content-digest" '
-            f'"x-yakrover-nonce");created={created};expires={expires}'
+            f'"@signature-params": {COMPONENTS};'
+            f"created={created};expires={expires}"
         ),
     ])
 
@@ -309,11 +317,10 @@ def sign_control_request(private_key: str, method: str, path: str,
         "body": body,
         "headers": {
             "Content-Type": "application/json",
-            "Content-Digest": digest,
-            "X-Yakrover-Nonce": nonce,
+            "content-digest": digest,
+            "x-yakrover-nonce": nonce,
             "Signature-Input": (
-                'sig=("@method" "@path" "content-digest" "x-yakrover-nonce");'
-                f"created={created};expires={expires}"
+                f"sig={COMPONENTS};created={created};expires={expires}"
             ),
             "Signature": (
                 "sig=:"
@@ -327,29 +334,40 @@ def sign_control_request(private_key: str, method: str, path: str,
 def verify_control_request(request: dict, expected_wallet: str,
                            nonce_store) -> bool:
     now = int(time.time())
-    created = request["created"]
-    expires = request["expires"]
-    nonce = request["headers"]["X-Yakrover-Nonce"]
-
-    if now > expires:
+    try:
+        created = int(request["created"])
+        expires = int(request["expires"])
+        nonce = request["headers"]["x-yakrover-nonce"]
+        digest = request["headers"]["content-digest"]
+        signature_header = request["headers"]["Signature"]
+    except (TypeError, ValueError, KeyError):
         return False
-    if not nonce_store.consume(nonce, ttl_seconds=expires - created):
+
+    if created > expires or created > now + CLOCK_SKEW_SECONDS:
+        return False
+    if now - CLOCK_SKEW_SECONDS > expires:
+        return False
+    ttl_seconds = expires - created
+    if ttl_seconds <= 0:
+        return False
+    if not nonce_store.consume(nonce, ttl_seconds=ttl_seconds):
         return False
 
     signing_string = build_signing_string(
         method=request["method"],
         path=request["path"],
-        digest=request["headers"]["Content-Digest"],
+        digest=digest,
         nonce=nonce,
         created=created,
         expires=expires,
     )
 
+    if not signature_header.startswith("sig=:") or not signature_header.endswith(":"):
+        return False
+
     recovered = Account.recover_message(
         encode_defunct(text=signing_string),
-        signature=base64.b64decode(
-            request["headers"]["Signature"].removeprefix("sig=:").removesuffix(":")
-        ),
+        signature=base64.b64decode(signature_header[len("sig=:"):-1]),
     )
     return recovered.lower() == expected_wallet.lower()
 ```
@@ -359,6 +377,11 @@ Implementation notes:
 - For EOAs, recovery can use normal Ethereum message verification as shown
   above.
 - For smart contract wallets, replace local recovery with an ERC-1271 check.
+- `encode_defunct()` applies the standard Ethereum signed-message prefix
+  (`\x19Ethereum Signed Message:\n` plus the message length), so the signature
+  can be verified with normal Ethereum wallet tooling.
+- `nonce_store.consume()` should be atomic and backed by a shared store such as
+  Redis when multiple API workers can verify requests concurrently.
 - The verifier should only authorize the command if both checks succeed:
   **(1) the x402-paid session is active** and **(2) the ERC-8128 signer
   matches the paid wallet**.
