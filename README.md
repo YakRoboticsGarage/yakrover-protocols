@@ -25,7 +25,7 @@ Hardware-anchored Ethereum identity using ATECC608B secure elements, ERC-8004 ag
 
 - **Three keys:** Robot (ATECC608B), Fleet Policy Server, Operator Signer
 - **Every consequential action requires two signatures.** Routine operations are auto-cosigned by the server within policy. Privileged actions require human operator approval.
-- **Tiered actions:** Tier 0/1 (automated) through Tier 3 (administrative), each requiring different key pair combinations.
+- **Tiered actions:** Tier 0/1 (automated) through Tier 3 (administrative), each requiring different key combinations.
 - **Graceful degradation:** Any one component down, the other two continue operating.
 
 | Version | Status | Description |
@@ -60,7 +60,7 @@ Autonomous robot payments and economic interactions.
 |-------|-----------|----------|
 | Hardware | ESP32-S3 + ATECC608B | Identity |
 | On-Chain Registry | ERC-8004 (ERC-721) | Identity, Discovery |
-| HTTP Authentication | ERC-8128 / RFC 9421 | Identity, Fleet Security |
+| HTTP Authentication | RFC 9421 / ERC-8128 | Identity, Fleet Security |
 | Wallet | Privy Server SDK (secp256k1) | Identity, Payments |
 | Fleet Governance | Safe{Wallet} (multisig + modules + guards) | Fleet Security |
 | Account Abstraction | ERC-4337 + Paymaster | Fleet Security, Payments |
@@ -69,5 +69,3 @@ Autonomous robot payments and economic interactions.
 | Caching | Redis | Fleet Security, Discovery |
 
 ## License
-
-[Apache License 2.0](LICENSE)
