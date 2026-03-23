@@ -1,3 +1,4 @@
+```markdown
 # yakrover-protocols
 
 Protocol specifications for autonomous robot fleet identity, security, discovery, and payments on Ethereum.
@@ -69,3 +70,6 @@ Autonomous robot payments and economic interactions.
 | Caching | Redis | Fleet Security, Discovery |
 
 ## License
+
+See [LICENSE](LICENSE).
+```
