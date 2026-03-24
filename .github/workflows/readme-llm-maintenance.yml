@@ -67,7 +67,8 @@ jobs:
               "- Do not remove existing sections unless they are clearly incorrect." \
               "- Preserve headings and most wording." \
               "- Keep edits focused on specific details (paths, filenames, short clarifications)." \
-              "- Return the full updated README markdown only."
+              "- Return the full updated README markdown only." \
+              "- Do NOT wrap the output in markdown code fences (no \`\`\`markdown or \`\`\` wrapper)."
             echo
             echo "Repository file tree (depth<=3):"
             echo "$repo_tree"
@@ -96,7 +97,7 @@ jobs:
             sudo apt-get update && sudo apt-get install -y jq
           fi
 
-          system_prompt="You are maintaining a technical README in a protocol repository. Make only minimal, conservative edits. Do not rewrite structure or tone. Preserve headings and most wording. Keep edits focused on specific details (paths, filenames, short clarifications). Return the full updated README markdown only."
+          system_prompt="You are maintaining a technical README in a protocol repository. Make only minimal, conservative edits. Do not rewrite structure or tone. Preserve headings and most wording. Keep edits focused on specific details (paths, filenames, short clarifications). Return the full updated README markdown only. Do NOT wrap the output in markdown code fences (no \`\`\`markdown or \`\`\` wrapper)."
 
           payload=$(jq -n \
             --arg model "$ANTHROPIC_MODEL" \
