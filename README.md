@@ -58,7 +58,7 @@ Autonomous robot payments and economic interactions.
 
 | Layer | Component | Protocol |
 |-------|-----------|----------|
-| Hardware | ESP32-S3 + ATECC608B | Identity |
+| Hardware | ESP32-S3 + ATECC608B | Identity, Fleet Security |
 | On-Chain Registry | ERC-8004 (ERC-721) | Identity, Discovery |
 | HTTP Authentication | RFC 9421 / ERC-8128 | Identity, Fleet Security |
 | Wallet | Privy Server SDK (secp256k1) | Identity, Payments |
