@@ -54,6 +54,14 @@ Autonomous robot payments and economic interactions.
 |---------|--------|-------------|
 | [v0.0.1](04-yakrover-payments/specs/payments-v0.0.1.md) | Draft | Initial specification |
 
+### [05 — Marketplace](05-yakrover-marketplace/)
+
+Robot services marketplace for listing, discovery, and transacting over autonomous robot capabilities.
+
+| Version | Status | Description |
+|---------|--------|-------------|
+| — | In Progress | No versioned spec yet; see [SCOPE.md](05-yakrover-marketplace/SCOPE.md) and [ROADMAP.md](05-yakrover-marketplace/ROADMAP.md) |
+
 ## Tech Stack
 
 | Layer | Component | Protocol |
