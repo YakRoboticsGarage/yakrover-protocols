@@ -1,13 +1,14 @@
 # yakrover-payments
 
-## Payment-Gated Robot Control with x402 and the Tumbller Web App
+## Payment-Gated Robot Control with x402, ERC-8128, and the Tumbller Web App
 
 The tumbller-react-fastapi project implements payment-gated robot access
-using the x402 protocol. Users pay with USDC on the Base network to unlock
-time-limited control sessions. Every payment is settled on-chain, every robot
-has its own wallet, and operators can withdraw earnings at any time. This
-document describes the full payment architecture — from wallet login through
-on-chain settlement to robot payout.
+using the x402 protocol and ERC-8128 HTTP request signatures. Users pay with
+USDC on the Base network to unlock time-limited control sessions, then use the
+same wallet to authenticate each follow-on API call. Every payment is settled
+on-chain, every robot has its own wallet, and operators can withdraw earnings
+at any time. This document describes the full payment architecture — from
+wallet login through on-chain settlement to robot payout.
 
 ## The x402 Protocol
 
@@ -24,6 +25,31 @@ can be payment-gated without modifying business logic. The FastAPI backend
 uses a dynamic x402 middleware that intercepts requests to protected routes
 before they reach the route handlers.
 
+## ERC-8128 Request Authentication for Paid Sessions
+
+x402 answers **"has this request been paid for?"** ERC-8128 answers
+**"which wallet is making this HTTP request right now?"** The two standards
+work well together in yakrover-payments:
+
+- **Wallet-native authentication** — The wallet used to sign the x402 payment
+  can also sign HTTP requests, removing the need for API keys, bearer tokens,
+  or a separate session cookie.
+- **RFC 9421 request binding** — Signatures cover the HTTP method, path,
+  selected headers, and optionally the request body digest, so a signature for
+  one command cannot be replayed against a different command.
+- **Replay protection by default** — Non-replayable requests include a nonce
+  plus `created` / `expires` timestamps. The server stores seen nonces for the
+  validity window and rejects duplicates.
+- **Granular authorization** — Sensitive robot commands should use
+  **request-bound** signatures. Less sensitive read-only polling can
+  optionally accept **class-bound** signatures that authorize a narrow class
+  of requests for a short period.
+- **Smart account compatibility** — EOAs can be verified with normal
+  signature recovery. Contract wallets should be verified via ERC-1271.
+
+For yakrover-payments, the recommended model is: **x402 to buy a session,
+ERC-8128 to authenticate every request inside that paid session.**
+
 ## Architecture
 
 The payment system spans three layers: the React frontend that handles wallet
@@ -35,7 +61,8 @@ settle.
 
 The frontend uses Privy SDK for wallet authentication, supporting MetaMask,
 Coinbase Wallet, and WalletConnect. Once authenticated, the user has a wallet
-address that serves as their identity throughout the payment flow.
+address that serves as their identity throughout the payment flow and can sign
+both x402 payment approvals and ERC-8128 HTTP requests.
 
 Key frontend libraries:
 
@@ -45,6 +72,8 @@ Key frontend libraries:
   402 responses by signing payments
 - **@x402/evm** — EIP-712 signing utilities for constructing x402 payment
   headers
+- **ERC-8128 signer** — Adds `Signature-Input` and `Signature` headers to
+  authenticated robot control requests
 
 The React app provides dedicated components for the payment flow:
 `PurchaseAccess` presents the payment interface, `SessionStatus` shows
@@ -68,6 +97,14 @@ for the session duration. Other users cannot control that robot until the
 session expires. The session tracks the wallet address, the robot ID, the
 start time, and the expiration.
 
+**ERC-8128 Verifier** — A request-signature verifier that checks RFC 9421
+signature headers, validates the signature against the caller's wallet
+address, enforces nonce uniqueness, and rejects expired or replayed requests.
+For state-changing routes, it should require request-bound signatures. In a
+FastAPI deployment, this can run as middleware immediately after x402 session
+creation checks or as a shared dependency used by the robot proxy and payout
+routes.
+
 **Privy Wallet Service** — Each robot gets a server-side Privy wallet when
 it's registered. This wallet receives USDC payments and holds the robot's
 earnings. The service handles wallet creation via the Privy API, balance
@@ -89,6 +126,29 @@ an active session for a given robot can issue commands.
 | `/api/v1/robots/{id}/balance` | GET | Query robot wallet balances (ETH + USDC) |
 | `/api/v1/robots/{id}/sync-wallet` | POST | Re-send wallet address to robot hardware |
 | `/api/v1/robots/{id}/switch-wallet` | POST | Switch between user and Privy wallets |
+
+## ERC-8128 Policy for Paid Robot Sessions
+
+Once a wallet has purchased a session through x402, the backend should apply
+the following ERC-8128 verification policy:
+
+| Route type | Recommended binding | Replay policy | Notes |
+|---|---|---|---|
+| `POST /api/v1/access/purchase` | Request-bound | Non-replayable | Pair payment and wallet auth on the purchase call |
+| Motor / actuator commands | Request-bound | Non-replayable | Prevent command reuse against another path or payload |
+| Payout and wallet switching | Request-bound | Non-replayable | Highest-risk routes; also verify owner authorization |
+| `GET /api/v1/access/status` | Class-bound optional | Replayable or short non-replayable | Useful for low-friction polling if the verifier explicitly allows it |
+| Telemetry / sensor reads | Class-bound optional | Replayable or short non-replayable | Safe only when scoped to read-only routes |
+
+Recommended verifier settings:
+
+- Maximum validity window: **60 seconds** for control actions
+- Allowed clock skew: **5 seconds** to tolerate normal client / server drift
+- Required replay protection: **nonce + created + expires**
+- Required request-bound components: **method, path, content digest when a
+  body exists, `x-yakrover-robot-id`, and `x-yakrover-session-id`**
+- Address matching: the recovered ERC-8128 signer must match the wallet that
+  paid for the active session
 
 ### Blockchain Layer
 
@@ -161,21 +221,170 @@ robot, locking it for the duration of the session (typically a configurable
 number of minutes). The original request then passes through to the route
 handler, which returns the session details.
 
-### 7. Robot Control
+### 7. ERC-8128 Control Authentication
+
+After the session is created, the frontend signs each robot control request
+with ERC-8128. The signature should bind the request method, path, and body
+digest to the caller's wallet and include a nonce plus validity window. The
+backend verifies the signature, checks that the signer matches the paid
+session wallet, and rejects replayed or expired signatures.
+
+This removes the need for a separate API token while preserving strong
+per-request authorization: if an attacker steals one signed request, they
+cannot reuse it for another command or after the nonce has been consumed.
+
+### 8. Robot Control
 
 For the duration of the session, the user can send motor commands, read
 sensors, and stream camera frames. Each request passes through the
-middleware, which checks for an active session matching the caller's wallet
-and the target robot. No additional payment is needed until the session
-expires.
+middleware, which checks for an active session matching the caller's wallet,
+the target robot, and the verified ERC-8128 signer. No additional payment is
+needed until the session expires.
 
-### 8. Payout
+### 9. Payout
 
 The robot's Privy wallet accumulates USDC from multiple users over time. The
 robot owner can call `/api/v1/robots/{id}/payout` to transfer the
 accumulated balance to their personal wallet. The Privy API handles the
 on-chain USDC transfer from the robot's server-side wallet to the owner's
 address.
+
+## Illustrative Python Example
+
+The following Python sketch shows the shape of an ERC-8128-style flow for
+yakrover-payments. It is intentionally minimal: it signs a request-bound,
+non-replayable control request with an Ethereum wallet, then verifies the
+signature server-side before checking the paid session.
+
+```python
+import base64
+import hashlib
+import json
+import time
+import uuid
+
+from eth_account import Account
+from eth_account.messages import encode_defunct
+
+
+CLOCK_SKEW_SECONDS = 5
+COMPONENTS = '("@method" "@path" "content-digest" "x-yakrover-nonce")'
+
+
+def content_digest(body: bytes) -> str:
+    digest = hashlib.sha256(body).digest()
+    return "sha-256=:" + base64.b64encode(digest).decode("ascii") + ":"
+
+
+def build_signing_string(method: str, path: str, digest: str, nonce: str,
+                         created: int, expires: int) -> str:
+    return "\n".join([
+        f'"@method": "{method}"',
+        f'"@path": "{path}"',
+        f'"content-digest": "{digest}"',
+        f'"x-yakrover-nonce": "{nonce}"',
+        (
+            f'"@signature-params": {COMPONENTS};'
+            f"created={created};expires={expires}"
+        ),
+    ])
+
+
+def sign_control_request(private_key: str, method: str, path: str,
+                         payload: dict) -> dict:
+    body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    digest = content_digest(body)
+    nonce = str(uuid.uuid4())
+    created = int(time.time())
+    expires = created + 60
+    signing_string = build_signing_string(
+        method=method,
+        path=path,
+        digest=digest,
+        nonce=nonce,
+        created=created,
+        expires=expires,
+    )
+
+    message = encode_defunct(text=signing_string)
+    signed = Account.sign_message(message, private_key=private_key)
+
+    return {
+        "method": method,
+        "path": path,
+        "created": created,
+        "expires": expires,
+        "body": body,
+        "headers": {
+            "Content-Type": "application/json",
+            "content-digest": digest,
+            "x-yakrover-nonce": nonce,
+            "Signature-Input": (
+                f"sig={COMPONENTS};created={created};expires={expires}"
+            ),
+            "Signature": (
+                "sig=:"
+                + base64.b64encode(bytes(signed.signature)).decode("ascii")
+                + ":"
+            ),
+        },
+    }
+
+
+def verify_control_request(request: dict, expected_wallet: str,
+                           nonce_store) -> bool:
+    now = int(time.time())
+    try:
+        created = int(request["created"])
+        expires = int(request["expires"])
+        nonce = request["headers"]["x-yakrover-nonce"]
+        digest = request["headers"]["content-digest"]
+        signature_header = request["headers"]["Signature"]
+    except (TypeError, ValueError, KeyError):
+        return False
+
+    if created > expires or created > now + CLOCK_SKEW_SECONDS:
+        return False
+    if now - CLOCK_SKEW_SECONDS > expires:
+        return False
+    ttl_seconds = expires - created
+    if ttl_seconds <= 0:
+        return False
+    if not nonce_store.consume(nonce, ttl_seconds=ttl_seconds):
+        return False
+
+    signing_string = build_signing_string(
+        method=request["method"],
+        path=request["path"],
+        digest=digest,
+        nonce=nonce,
+        created=created,
+        expires=expires,
+    )
+
+    if not signature_header.startswith("sig=:") or not signature_header.endswith(":"):
+        return False
+
+    recovered = Account.recover_message(
+        encode_defunct(text=signing_string),
+        signature=base64.b64decode(signature_header[len("sig=:"):-1]),
+    )
+    return recovered.lower() == expected_wallet.lower()
+```
+
+Implementation notes:
+
+- For EOAs, recovery can use normal Ethereum message verification as shown
+  above.
+- For smart contract wallets, replace local recovery with an ERC-1271 check.
+- `encode_defunct()` applies the standard Ethereum signed-message prefix
+  (`\x19Ethereum Signed Message:\n` plus the message length), so the signature
+  can be verified with normal Ethereum wallet tooling.
+- `nonce_store.consume()` should be atomic and backed by a shared store such as
+  Redis when multiple API workers can verify requests concurrently.
+- The verifier should only authorize the command if both checks succeed:
+  **(1) the x402-paid session is active** and **(2) the ERC-8128 signer
+  matches the paid wallet**.
 
 ## Robot Wallet Lifecycle
 
@@ -222,7 +431,7 @@ robot-to-robot payments, where one robot can pay another for services. For
 example, a robot that needs sensor data from a nearby robot could pay for a
 reading via x402. Each robot already has its own wallet, so the
 infrastructure is in place — what's needed is an agent layer that can sign
-x402 payments on behalf of a robot.
+x402 payments and ERC-8128 HTTP requests on behalf of a robot.
 
 ### A2A x402 Integration
 
