@@ -37,7 +37,7 @@ Hardware-anchored Ethereum identity using ATECC608B secure elements, ERC-8004 ag
 
 On-chain robot discovery and MCP-based fleet control via ERC-8004.
 
-- **Blockchain for discovery, not control.** Robots are registered as ERC-721 NFTs on Ethereum with MCP endpoint URLs, tool lists, and IPFS-hosted AgentCards.
+- **Blockchain for discovery, not control.** Robots are registered as ERC-8004 NFTs on Ethereum with MCP endpoint URLs, tool lists, and IPFS-hosted AgentCards.
 - **Global discoverability:** Any AI agent, anywhere in the world, can query the blockchain to find robots — no central directory needed.
 - **MCP gateway:** A single FastAPI gateway multiplexes isolated MCP servers for each robot behind one public URL.
 - **Plugin architecture:** Each robot is a Python package implementing `RobotPlugin`. Supports HTTP, UDP, serial, or any transport.
