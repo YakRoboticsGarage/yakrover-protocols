@@ -60,7 +60,7 @@ Robot services marketplace for listing, discovery, and transacting over autonomo
 
 | Version | Status | Description |
 |---------|--------|-------------|
-| — | In Progress | No versioned spec yet; see [SCOPE.md](05-yakrover-marketplace/SCOPE.md) and [ROADMAP.md](05-yakrover-marketplace/ROADMAP.md) |
+| — | In Progress | No versioned spec yet; see [README.md](05-yakrover-marketplace/README.md), [SCOPE.md](05-yakrover-marketplace/SCOPE.md), and [ROADMAP.md](05-yakrover-marketplace/ROADMAP.md) |
 
 ## Tech Stack
 
